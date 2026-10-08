@@ -496,9 +496,9 @@ export default function DondeManoloApp() {
       <h1 className="text-4xl font-bold mb-8 text-yellow-500">DK FOOD HOUSE</h1>
       <div className="grid grid-cols-2 gap-6 w-full max-w-md px-4">
         {['DUEÑO', 'GERENCIA', 'CAJA', 'MESERO'].map((role, idx) => (
-          <button key={role} onClick={() => { const p = prompt(`PIN ${role}:`); if(p) login(p); }} className={`p-6 rounded-xl text-lg font-bold shadow-lg transform hover:scale-105 transition ${idx===0?'bg-yellow-600':idx===1?'bg-blue-600':idx===2?'bg-green-600':'bg-purple-600'}`}>🥩 {role}</button>
+          <button key={role} onClick={() => { const p = prompt(`PIN ${role}:`); if(p) login(p); }} className={`p-6 rounded-xl text-lg font-bold shadow-lg transform hover:scale-105 transition ${idx===0?'bg-yellow-600':idx===1?'bg-blue-600':idx===2?'bg-green-600':'bg-purple-600'}`}> {role}</button>
         ))}
-        <button onClick={() => { const p = prompt("PIN Cocina:"); if(p) login(p); }} className="col-span-2 p-4 bg-gray-700 rounded-xl font-bold border border-gray-500">🍔 COCINA</button>
+        <button onClick={() => { const p = prompt("PIN Cocina:"); if(p) login(p); }} className="col-span-2 p-4 bg-gray-700 rounded-xl font-bold border border-gray-500">COCINA</button>
       </div>
     </div>
   );
@@ -805,7 +805,7 @@ export default function DondeManoloApp() {
                                           </div>
                                       ) : (
                                           <div className="text-green-600 font-bold text-xl flex items-center justify-center gap-2">
-                                              <div className="bg-green-100 p-2 rounded-full">✅</div> LISTO PARA SALDAR
+                                              <div className="bg-green-100 p-2 rounded-full">✅</div> LISTO PARA PAGAR
                                           </div>
                                       );
                                   })()}
@@ -857,7 +857,7 @@ export default function DondeManoloApp() {
                                   
                                   {selectedOrder.status !== 'credito' && (
                                       <button onClick={handleSendToCredit} disabled={processing || !currentSession} className="w-full bg-orange-100 text-orange-700 border-2 border-orange-500 py-2 rounded-xl font-bold hover:bg-orange-200">
-                                          FIAR / ENVIAR A CRÉDITO
+                                          ENVIAR A CRÉDITO
                                       </button>
                                   )}
                               </div>
@@ -909,8 +909,8 @@ export default function DondeManoloApp() {
 
       {lastOrderTicket && !closingData && (
         <div id="ticket-impresion">
-          <div className="ticket-centrado ticket-grande">DONDE MANOLO</div>
-          <div className="ticket-centrado">M&F</div>
+          <div className="ticket-centrado ticket-grande">DK FOOD HOUSE</div>
+          <div className="ticket-centrado">DK</div>
           <div className="ticket-linea"></div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{new Date().toLocaleDateString()}</span><span>{new Date().toLocaleTimeString()}</span></div>
           <div className="ticket-negrita" style={{ marginTop: '5px' }}>{lastOrderTicket.service_type}: {lastOrderTicket.info}</div>
@@ -937,7 +937,7 @@ export default function DondeManoloApp() {
             <div className="border-b-2 border-black pb-4 mb-6 flex justify-between mt-8">
                 <div>
                     <h1 className="text-3xl font-bold">REPORTE DETALLADO (V3)</h1>
-                    <p className="text-gray-600">Donde Manolo - Control de Caja</p>
+                    <p className="text-gray-600">DK FOOD HOUSE - Control de Caja</p>
                     <p className="text-sm font-bold mt-2 bg-yellow-100 inline-block px-2 border border-yellow-300">
                         Tasa de Cambio: {closingData.tasa_calculo} Bs/$
                     </p>
@@ -982,7 +982,7 @@ export default function DondeManoloApp() {
             </div>
 
             <div className="mb-6 border-2 border-black p-4 rounded bg-white">
-                <h3 className="font-bold text-center text-xl mb-4">💰 ARQUEO DE EFECTIVO</h3>
+                <h3 className="font-bold text-center text-xl mb-4">ARQUEO DE EFECTIVO</h3>
                 <div className="flex justify-around text-center">
                     <div><div className="text-sm text-gray-500">EFECTIVO USD (Inc. Base)</div><div className="text-4xl font-bold">${closingData.cashInUsd.toFixed(2)}</div></div>
                     <div><div className="text-sm text-gray-500">EFECTIVO BOLIVARES</div><div className="text-4xl font-bold">Bs {closingData.cashInBs.toFixed(2)}</div></div>
@@ -991,7 +991,7 @@ export default function DondeManoloApp() {
             
             {user.role === 'owner' && (
                 <div className="mt-8 border-t-4 border-black pt-4 page-break">
-                    <h2 className="text-2xl font-bold mb-4 text-center bg-black text-white py-1">DETALLE CONFIDENCIAL (DUEÑO)</h2>
+                    <h2 className="text-2xl font-bold mb-4 text-center bg-black text-white py-1">DETALLE</h2>
                     
                     <div className="grid grid-cols-2 gap-8 mb-6">
                          <div><h4 className="font-bold border-b mb-2">Ranking Productos</h4><table className="w-full text-xs"><thead><tr><th className="text-left">Producto</th><th className="text-right">Cant.</th></tr></thead><tbody>{Object.entries(closingData.productCount).map(([name, qty]) => (<tr key={name} className="border-b"><td>{name}</td><td className="text-right font-bold">{qty}</td></tr>))}</tbody></table></div>
@@ -1042,7 +1042,7 @@ export default function DondeManoloApp() {
             </div>
             
             <div className="border-b-2 border-black pb-4 mb-6 flex justify-between mt-8">
-                <div><h1 className="text-3xl font-bold">REPORTE CONSOLIDADO GLOBAL</h1><p className="text-gray-600">Donde Manolo - Gerencia</p></div>
+                <div><h1 className="text-3xl font-bold">REPORTE DIARIO GLOBAL</h1><p className="text-gray-600">DK FOOD HOUSE</p></div>
                 <div className="text-right text-sm"><p><strong>Desde:</strong> {closingData.startDate}</p><p><strong>Hasta:</strong> {closingData.endDate}</p><p><strong>Turnos Auditados:</strong> {closingData.sessionsCount}</p></div>
             </div>
 
@@ -1065,7 +1065,7 @@ export default function DondeManoloApp() {
 
             <div className="grid grid-cols-2 gap-8 mb-6">
                  <div>
-                    <h4 className="font-bold border-b mb-2">Top Productos Vendidos</h4>
+                    <h4 className="font-bold border-b mb-2">Productos Vendidos</h4>
                     <table className="w-full text-xs">
                         <thead><tr><th className="text-left">Producto</th><th className="text-right">Cant. Total</th></tr></thead>
                         <tbody>{Object.entries(closingData.productCount).sort((a,b)=>b[1]-a[1]).map(([name, qty]) => (<tr key={name} className="border-b"><td>{name}</td><td className="text-right font-bold text-indigo-700">{qty}</td></tr>))}</tbody>
