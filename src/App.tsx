@@ -497,7 +497,7 @@ export default function DondeManoloApp() {
 
       <nav className="bg-gray-900 text-white p-4 flex justify-between items-center sticky top-0 z-50 shadow-lg no-print">
         <div className="flex flex-col">
-            <div className="font-bold text-lg text-yellow-400">MANOLO <span className="text-xs text-gray-400">({user.role})</span></div>
+            <div className="font-bold text-lg text-yellow-400">DK <span className="text-xs text-gray-400">({user.role})</span></div>
             <div className="text-xs flex items-center gap-1">
                 {currentSession ? <span className="text-green-400 flex items-center gap-1"><Unlock size={10}/> ABIERTO #{currentSession.id}</span> : <span className="text-red-500 flex items-center gap-1"><Lock size={10}/> CERRADO</span>}
             </div>
