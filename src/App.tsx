@@ -476,7 +476,7 @@ export default function DondeManoloApp() {
   
   if (!user) return (
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center text-white">
-      <h1 className="text-4xl font-bold mb-8 text-yellow-500">DONDE MANOLO</h1>
+      <h1 className="text-4xl font-bold mb-8 text-yellow-500">DK FOOD HOUSE</h1>
       <div className="grid grid-cols-2 gap-6 w-full max-w-md px-4">
         {['DUEÑO', 'GERENCIA', 'CAJA', 'MESERO'].map((role, idx) => (
           <button key={role} onClick={() => { const p = prompt(`PIN ${role}:`); if(p) login(p); }} className={`p-6 rounded-xl text-lg font-bold shadow-lg transform hover:scale-105 transition ${idx===0?'bg-yellow-600':idx===1?'bg-blue-600':idx===2?'bg-green-600':'bg-purple-600'}`}>🥩 {role}</button>
