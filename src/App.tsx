@@ -27,11 +27,11 @@ export default function DondeManoloApp() {
   const [orders, setOrders] = useState([]); 
   const [expenses, setExpenses] = useState([]); 
   const [staffList, setStaffList] = useState([]);
-  const [paymentMethods, setPaymentMethods] = useState([]); // NUEVO: Métodos de Pago
+  const [paymentMethods, setPaymentMethods] = useState([]); 
   const [newPayMethod, setNewPayMethod] = useState({ name: '', currency: 'USD' });
 
-  // Editor de Recetas
-  const [invSubView, setInvSubView] = useState('insumos');
+  // Editor de Inventario / Recetas
+  const [invSubView, setInvSubView] = useState('platos'); // INICIA EN PLATOS POR DEFECTO
   const [selectedProductRecipe, setSelectedProductRecipe] = useState('');
   const [newRecipeEntry, setNewRecipeEntry] = useState({ ingredientId: '', quantity: '' });
 
@@ -47,7 +47,7 @@ export default function DondeManoloApp() {
   const [globalReportDates, setGlobalReportDates] = useState({ start: '', end: '' });
 
   // Caja
-  const [cajaTab, setCajaTab] = useState('activas'); // NUEVO: Pestañas en Caja
+  const [cajaTab, setCajaTab] = useState('activas'); 
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState('');
   const [currentPayments, setCurrentPayments] = useState([]);
@@ -114,7 +114,6 @@ export default function DondeManoloApp() {
     setRecipes(recipesMap);
 
     if (sessionData) {
-        // NUEVO: Cargar órdenes del turno actual O que estén a crédito (para poder cobrarlas hoy)
         const o = await supabase.from('orders')
             .select('*, order_items(*), payments(*)')
             .or(`session_id.eq.${sessionData.id},status.eq.credito`)
@@ -165,11 +164,10 @@ export default function DondeManoloApp() {
       setLoading(false);
   };
 
-  // --- GENERAR REPORTE (MODIFICADO PARA FLUJO DE CAJA EXACTO) ---
+  // --- GENERAR REPORTE ---
   const generateReportData = async (session, isHistorical = false) => {
       setLoading(true);
       
-      // NUEVO LÓGICA DE REPORTE: Basado en Pagos recibidos en el turno, NO en las órdenes.
       const o = await supabase.from('orders').select('*, order_items(*)').eq('session_id', session.id);
       const e = await supabase.from('expenses').select('*').eq('session_id', session.id);
       const p = await supabase.from('payments').select('*, orders(info)').eq('session_id', session.id);
@@ -178,10 +176,7 @@ export default function DondeManoloApp() {
       const sessionExpenses = e.data || [];
       const allPayments = p.data || [];
 
-      // Ventas despachadas hoy (Independiente de si se pagaron o se fiaron)
       const totalVentasDespachadas = sessionOrders.reduce((sum, o) => sum + o.total_usd, 0);
-      
-      // Dinero Real Ingresado HOY en caja (Incluye cobros de créditos anteriores)
       const dineroCobrado = allPayments.reduce((sum, pay) => sum + pay.amount_usd, 0);
       
       const breakdown = allPayments.reduce((acc, curr) => {
@@ -218,7 +213,7 @@ export default function DondeManoloApp() {
           opened_by: session.opened_by,
           closed_by: session.closed_by || 'N/A',
           base: session.base_amount,
-          sales: dineroCobrado, // El cuadre se hace con el dinero cobrado
+          sales: dineroCobrado, 
           ventas_teoricas: totalVentasDespachadas,
           expenses: expensesTotal,
           net: dineroCobrado - expensesTotal,
@@ -236,7 +231,6 @@ export default function DondeManoloApp() {
   };
 
   const handleGenerateGlobalReport = async () => {
-      // (Mismo ajuste aplicado al reporte global basándose en session_id de los payments)
       if (!globalReportDates.start || !globalReportDates.end) return alert("Fechas requeridas");
       setLoading(true);
 
@@ -332,7 +326,6 @@ export default function DondeManoloApp() {
     if (!currentSession) return alert("Caja Cerrada");
     if (processing) return;
     
-    // Cálculo de saldo restante sumando pagos históricos (útil para abonos de créditos)
     const previouslyPaid = selectedOrder.payments?.reduce((s, p) => s + p.amount_usd, 0) || 0;
     const totalPaidNow = currentPayments.reduce((s, p) => s + p.amount_usd, 0);
     const remaining = selectedOrder.total_usd - previouslyPaid - totalPaidNow;
@@ -346,14 +339,13 @@ export default function DondeManoloApp() {
         const paymentsToSave = currentPayments.map(p => ({ 
             order_id: selectedOrder.id, method: p.method, amount_usd: p.amount_usd, amount_bs: p.amount_bs, 
             rate_used: tasa, cashier: user.name, 
-            session_id: currentSession.id // EL PAGO ENTRA A LA CAJA DE HOY
+            session_id: currentSession.id
         }));
         
         if (paymentsToSave.length > 0) {
             await supabase.from('payments').insert(paymentsToSave);
         }
 
-        // Determinar status final
         const newStatus = remaining <= 0.05 ? 'pagado' : 'credito';
         await supabase.from('orders').update({ status: newStatus }).eq('id', selectedOrder.id);
         
@@ -421,10 +413,35 @@ export default function DondeManoloApp() {
     loadData();
   };
 
+  // --- NUEVAS FUNCIONES DE PLATOS ---
+  const handleAddProduct = async () => {
+      const n = prompt("Nombre del Plato:");
+      if (n) {
+          const p = prompt("Precio ($):");
+          if (p && !isNaN(p)) {
+              setLoading(true);
+              await supabase.from('products').insert([{ name: n, price_usd: parseFloat(p) }]);
+              loadData();
+              setLoading(false);
+          }
+      }
+  };
+
+  const handleDeleteProduct = async (id) => {
+      if (user.role !== 'owner') return;
+      if (!confirm("¿Eliminar plato?")) return;
+      setLoading(true);
+      await supabase.from('products').delete().eq('id', id);
+      loadData();
+      setLoading(false);
+  };
+
+  // --- FUNCIONES DE INSUMOS Y RECETAS ---
   const handleAddIngredient = async () => { const n = prompt("Nombre:"); if(n) { const u = prompt("Unidad:"); await supabase.from('ingredients').insert([{ name:n, unit:u, stock: 0 }]); loadData(); }};
   const handleDeleteIngredient = async (id) => { if (user.role !== 'owner') return; if (!confirm("¿Eliminar insumo?")) return; setLoading(true); await supabase.from('ingredients').delete().eq('id', id); loadData(); setLoading(false); };
   const handleAddIngredientToRecipe = async () => { if (!selectedProductRecipe || !newRecipeEntry.ingredientId) return; setLoading(true); await supabase.from('recipes').insert([{ product_name: selectedProductRecipe, ingredient_id: newRecipeEntry.ingredientId, quantity: parseFloat(newRecipeEntry.quantity) }]); setNewRecipeEntry({ ingredientId: '', quantity: '' }); loadData(); setLoading(false); };
   const handleRemoveRecipeItem = async (id) => { if (confirm("¿Eliminar?")) { setLoading(true); await supabase.from('recipes').delete().eq('id', id); loadData(); setLoading(false); }};
+  
   const login = async (pin) => {
     const { data, error } = await supabase.from('staff').select('*').eq('pin', pin).maybeSingle();
     if (error || !data) { alert("PIN Incorrecto"); return; }
@@ -491,7 +508,7 @@ export default function DondeManoloApp() {
       {/* ALERTA DE VERSION */}
       {showVersionAlert && (
         <div className="fixed top-0 left-0 w-full bg-green-500 text-white text-center p-2 font-bold z-[9999]">
-          VERSIÓN ACTUALIZADA V4 - CRÉDITOS Y MÉTODOS DE PAGO
+          VERSIÓN ACTUALIZADA V4 - CRÉDITOS Y MÉTODOS DE PAGO + GESTOR DE PLATOS
         </div>
       )}
 
@@ -532,7 +549,6 @@ export default function DondeManoloApp() {
                   <div className="flex gap-2"><input type="number" value={tasa} onChange={e => setTasa(e.target.value)} className="border p-2 rounded w-24" /><button onClick={async () => { await supabase.from('settings').upsert({ key:'tasa', value: { usd: tasa }}); alert("Guardado"); }} className="bg-blue-600 text-white p-2 rounded"><Save/></button></div>
               </div>
               
-              {/* NUEVO: PANEL DE MÉTODOS DE PAGO */}
               {user.role === 'owner' && (
                   <div className="bg-white p-6 rounded-lg shadow-md border-l-4 border-blue-500">
                       <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><CreditCard className="text-blue-600"/> Métodos de Pago & Promociones</h3>
@@ -624,7 +640,101 @@ export default function DondeManoloApp() {
           </div>
       )}
 
-      {/* RESTRICCIÓN DE CÓDIGO POR LONGITUD: Se mantienen exactas las vistas de reportes, inventario, pedidos y cocina. Paso directo a la vista modificada de la CAJA */}
+      {view === 'inventario' && (
+            <div className="max-w-7xl mx-auto p-4 bg-white rounded shadow-lg">
+                <div className="flex justify-between items-center mb-6 no-print">
+                    <h2 className="text-2xl font-bold">Inventario</h2>
+                    <div className="flex gap-4">
+                        <button onClick={() => setInvSubView('platos')} className={`font-bold ${invSubView==='platos'?'text-yellow-600 border-b-2 border-yellow-600':''}`}>PLATOS</button>
+                        <button onClick={() => setInvSubView('insumos')} className={`font-bold ${invSubView==='insumos'?'text-yellow-600 border-b-2 border-yellow-600':''}`}>INSUMOS</button>
+                        <button onClick={() => setInvSubView('recetas')} className={`font-bold ${invSubView==='recetas'?'text-yellow-600 border-b-2 border-yellow-600':''}`}>RECETAS</button>
+                    </div>
+                </div>
+
+                {invSubView === 'platos' && (
+                    <div className="overflow-x-auto">
+                        <div className="mb-4 flex justify-end">
+                            <button onClick={handleAddProduct} className="bg-green-600 text-white px-3 py-1 rounded text-sm font-bold flex items-center gap-1"><PlusCircle size={16}/> Nuevo Plato</button>
+                        </div>
+                        <table className="w-full text-left border">
+                            <thead><tr className="bg-gray-100 border-b"><th className="p-3">Plato</th><th className="p-3">Precio ($)</th>{user.role === 'owner' && <th className="p-3 no-print">Acciones</th>}</tr></thead>
+                            <tbody>{products.map(p => (
+                                <tr key={p.id} className="border-b hover:bg-gray-50">
+                                    <td className="p-3 font-bold">{p.name}</td>
+                                    <td className="p-3 text-green-600 font-bold">${p.price_usd}</td>
+                                    {user.role === 'owner' && (
+                                        <td className="p-3 no-print flex gap-2">
+                                            <button onClick={async () => { const v = prompt("Nuevo Precio ($):", p.price_usd); if(v && !isNaN(v)) { await supabase.from('products').update({price_usd: parseFloat(v)}).eq('id', p.id); loadData(); }}} className="text-blue-600 hover:bg-blue-50 p-2 rounded"><Edit3 size={16}/></button>
+                                            <button onClick={() => handleDeleteProduct(p.id)} className="text-red-500 hover:bg-red-50 p-2 rounded"><Trash2 size={16}/></button>
+                                        </td>
+                                    )}
+                                </tr>
+                            ))}</tbody>
+                        </table>
+                    </div>
+                )}
+
+                {invSubView === 'insumos' && (
+                    <div className="overflow-x-auto">
+                        <div className="mb-4 flex justify-end"><button onClick={handleAddIngredient} className="bg-green-600 text-white px-3 py-1 rounded text-sm font-bold flex items-center gap-1"><PlusCircle size={16}/> Nuevo Insumo</button></div>
+                        <table className="w-full text-left border">
+                            <thead><tr className="bg-gray-100 border-b"><th className="p-3">Item</th><th className="p-3">Stock</th><th className="p-3">Und</th>{user.role === 'owner' && <th className="p-3 no-print">Acciones</th>}</tr></thead>
+                            <tbody>{ingredients.map(ing => (
+                                <tr key={ing.id} className="border-b hover:bg-gray-50">
+                                    <td className="p-3">{ing.name}</td>
+                                    <td className={`p-3 font-bold ${ing.stock < 10 ? 'text-red-600' : 'text-gray-800'}`}>{Number(ing.stock).toFixed(2)}</td>
+                                    <td className="p-3 text-sm">{ing.unit}</td>
+                                    {user.role === 'owner' && (<td className="p-3 no-print flex gap-2"><button onClick={async () => { const v = prompt("Stock:", ing.stock); if(v) { await supabase.from('ingredients').update({stock:v}).eq('id', ing.id); loadData(); }}} className="text-blue-600 hover:bg-blue-50 p-2 rounded"><Edit3 size={16}/></button><button onClick={() => handleDeleteIngredient(ing.id)} className="text-red-500 hover:bg-red-50 p-2 rounded"><Trash2 size={16}/></button></td>)}
+                                </tr>
+                            ))}</tbody>
+                        </table>
+                    </div>
+                )}
+
+                {invSubView === 'recetas' && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="border-r pr-4 max-h-[60vh] overflow-y-auto">{products.map(p => (<button key={p.id} onClick={() => setSelectedProductRecipe(p.name)} className={`w-full text-left p-3 rounded font-bold border-b ${selectedProductRecipe === p.name ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 text-gray-700'}`}>{p.name}</button>))}</div>
+                        <div className="md:col-span-2">{selectedProductRecipe ? (<><h3 className="font-bold mb-4 text-xl border-b pb-2">Receta: <span className="text-blue-600">{selectedProductRecipe}</span></h3><div className="bg-gray-50 p-3 rounded mb-4 flex gap-2 shadow-sm"><select className="flex-1 border p-2 rounded bg-white" value={newRecipeEntry.ingredientId} onChange={e => setNewRecipeEntry({...newRecipeEntry, ingredientId: e.target.value})}><option value="">Seleccione insumo...</option>{ingredients.map(i => <option key={i.id} value={i.id}>{i.name} ({i.unit})</option>)}</select><input type="number" placeholder="Cant." className="w-24 border p-2 rounded" value={newRecipeEntry.quantity} onChange={e => setNewRecipeEntry({...newRecipeEntry, quantity: e.target.value})} /><button onClick={handleAddIngredientToRecipe} className="bg-blue-600 text-white p-2 rounded font-bold"><PlusCircle/></button></div><table className="w-full text-md border"><tbody>{(recipes[selectedProductRecipe] || []).map(rItem => { const ing = ingredients.find(i => i.id === rItem.ingredientId); return (<tr key={rItem.id} className="border-b hover:bg-gray-50"><td className="p-3 font-bold">{ing?.name}</td><td className="p-3">{rItem.quantity} <span className="text-gray-500 text-sm">{ing?.unit}</span></td><td className="p-3 text-right"><button onClick={() => handleRemoveRecipeItem(rItem.id)} className="text-red-500 hover:bg-red-50 p-2 rounded"><Trash2 size={16}/></button></td></tr>) })}</tbody></table></>) : <div className="text-gray-400 italic text-center mt-10">Selecciona un plato de la lista izquierda para editar su receta</div>}</div>
+                    </div>
+                )}
+            </div>
+        )}
+
+      {view === 'pedidos' && (
+          <div className="max-w-7xl mx-auto p-4 grid grid-cols-1 md:grid-cols-3 gap-6 h-[80vh]">
+              <div className="md:col-span-2 overflow-y-auto bg-white p-4 rounded shadow-lg">
+                  <h2 className="font-bold text-xl mb-4">Menú</h2>
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                      {products.map(p => (
+                          <div key={p.id} onClick={() => addToCart(p)} className="cursor-pointer border hover:border-yellow-500 p-4 rounded-lg bg-gray-50 hover:bg-yellow-50 transition transform hover:scale-105">
+                              <h3 className="font-bold text-gray-800">{p.name}</h3><p className="text-green-600 font-bold">${p.price_usd}</p>
+                          </div>
+                      ))}
+                  </div>
+              </div>
+              <div className="bg-white p-4 rounded shadow-lg flex flex-col h-full">
+                  <h2 className="font-bold text-xl mb-2">Comanda</h2>
+                  <div className="flex gap-2 mb-4"><select className="border p-2 rounded" onChange={e => setServiceInfo({...serviceInfo, type: e.target.value})}><option>Mesa</option><option>Para Llevar</option><option>Delivery</option></select><input placeholder="Cliente/Mesa" className="border p-2 rounded w-full" onChange={e => setServiceInfo({...serviceInfo, val: e.target.value})} value={serviceInfo.val} /></div>
+                  <div className="flex-1 overflow-y-auto border-t py-2">{cart.map(item => (<div key={item.tempId} className="flex justify-between border-b py-2 text-sm"><div><span className="font-bold">{item.name}</span> <div className="text-xs text-gray-500">${item.price_usd}</div><input placeholder="Notas..." className="text-xs border-b w-full mt-1 bg-transparent" value={item.notes || ''} onChange={e => updateCartNote(item.tempId, e.target.value)} /></div><button onClick={() => removeFromCart(item.tempId)} className="text-red-500"><Trash2 size={16}/></button></div>))}</div>
+                  <div className="pt-4 border-t"><button onClick={sendOrder} disabled={!currentSession} className="w-full bg-green-600 text-white py-3 rounded-lg font-bold text-lg disabled:bg-gray-400">{!currentSession ? 'CAJA CERRADA' : 'ENVIAR A COCINA'}</button></div>
+              </div>
+          </div>
+      )}
+
+      {view === 'cocina' && (
+          <div className="max-w-7xl mx-auto p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {orders.filter(o => o.status === 'pendiente').map(o => (
+                  <div key={o.id} className="bg-white rounded-lg shadow-md overflow-hidden border-l-8 border-yellow-500">
+                      <div className="bg-yellow-50 p-3 border-b border-yellow-100 flex justify-between items-center"><span className="font-bold text-lg text-gray-800">{o.service_type}</span><span className="text-sm font-bold bg-white px-2 rounded border">{o.info}</span></div>
+                      <div className="p-4"><ul className="space-y-3">{o.order_items.map(item => (<li key={item.id} className="text-gray-800 leading-tight"><div className="font-bold text-lg">• {item.product_name}</div>{item.notes && <div className="text-red-600 text-sm bg-red-50 p-1 rounded mt-1">📝 {item.notes}</div>}</li>))}</ul></div>
+                      <div className="flex">
+                         <button onClick={async () => { await supabase.from('orders').update({status:'listo'}).eq('id', o.id); fetchOrders(); }} className="flex-1 bg-green-600 text-white font-bold py-3 hover:bg-green-700">MARCAR LISTO ✅</button>
+                         <button onClick={() => { setTicketType('full'); setLastOrderTicket(o); setTimeout(()=>window.print(), 200); }} className="bg-gray-700 text-white px-4"><Printer size={20}/></button>
+                      </div>
+                  </div>
+              ))}
+          </div>
+      )}
 
       {view === 'caja' && (
            <div className="max-w-7xl mx-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -633,7 +743,6 @@ export default function DondeManoloApp() {
               )}
               
               <div className="bg-white p-4 rounded shadow">
-                  {/* PESTAÑAS: ACTIVAS VS POR COBRAR */}
                   <div className="flex gap-4 mb-4 border-b pb-2">
                       <button onClick={()=>{setCajaTab('activas'); setSelectedOrder(null);}} className={`font-bold pb-2 border-b-2 ${cajaTab==='activas'?'text-blue-600 border-blue-600':'text-gray-400 border-transparent'}`}>Mesas Activas</button>
                       <button onClick={()=>{setCajaTab('cobrar'); setSelectedOrder(null);}} className={`font-bold pb-2 border-b-2 ${cajaTab==='cobrar'?'text-orange-600 border-orange-600':'text-gray-400 border-transparent'}`}>Cuentas por Cobrar</button>
@@ -676,8 +785,6 @@ export default function DondeManoloApp() {
                               <div className="mb-4 bg-gray-50 p-4 rounded text-center border">
                                   <div className="text-gray-500 text-sm">TOTAL DE LA CUENTA</div>
                                   <div className="text-4xl font-bold text-gray-900">${selectedOrder.total_usd.toFixed(2)}</div>
-                                  
-                                  {/* Mostrar abonos previos si existen */}
                                   {(() => {
                                       const prevPaid = selectedOrder.payments?.reduce((s, p) => s + p.amount_usd, 0) || 0;
                                       if (prevPaid > 0) return <div className="text-green-600 font-bold mt-2 text-sm bg-green-50 p-1 rounded">Pagado anteriormente: ${prevPaid.toFixed(2)}</div>;
@@ -712,7 +819,6 @@ export default function DondeManoloApp() {
                               <div className="mb-6">
                                   <div className="flex gap-2 mb-2">
                                       <input type="number" placeholder="Monto" className="border p-2 rounded flex-1 text-lg" value={payAmount} onChange={e => setPayAmount(e.target.value)} />
-                                      {/* SELECTOR DINÁMICO DE MÉTODOS DE PAGO */}
                                       <select className="border p-2 rounded bg-white" value={payMethod} onChange={e => setPayMethod(e.target.value)}>
                                           {paymentMethods.filter(pm => pm.is_active).map(pm => (
                                               <option key={pm.id} value={pm.name}>{pm.name}</option>
@@ -749,7 +855,6 @@ export default function DondeManoloApp() {
                                       {!currentSession ? 'CAJA CERRADA' : currentPayments.length > 0 ? 'REGISTRAR PAGO' : 'NADA QUE COBRAR'}
                                   </button>
                                   
-                                  {/* BOTÓN PARA MANDAR A CRÉDITO */}
                                   {selectedOrder.status !== 'credito' && (
                                       <button onClick={handleSendToCredit} disabled={processing || !currentSession} className="w-full bg-orange-100 text-orange-700 border-2 border-orange-500 py-2 rounded-xl font-bold hover:bg-orange-200">
                                           FIAR / ENVIAR A CRÉDITO
@@ -768,7 +873,236 @@ export default function DondeManoloApp() {
           </div>
       )}
 
-      {/* (EL RESTO DEL CÓDIGO INFERIOR COMO IMPRESIÓN DE TICKETS Y REPORTES SE MANTIENE INTACTO RESPECTO A LA ESTRUCTURA VISUAL DEL V3) */}
+      {view === 'reportes' && (
+          <div className="max-w-7xl mx-auto p-4 space-y-6">
+              {user.role === 'owner' && (
+                  <div className="bg-white p-6 rounded-lg shadow-md no-print border-l-4 border-indigo-500">
+                      <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><TrendingUp className="text-indigo-600"/> Reporte Global</h3>
+                      <div className="flex flex-wrap gap-4 items-end">
+                          <div><label className="block text-sm font-bold mb-1">Desde</label><input type="date" className="border p-2 rounded" value={globalReportDates.start} onChange={e => setGlobalReportDates({...globalReportDates, start: e.target.value})} /></div>
+                          <div><label className="block text-sm font-bold mb-1">Hasta</label><input type="date" className="border p-2 rounded" value={globalReportDates.end} onChange={e => setGlobalReportDates({...globalReportDates, end: e.target.value})} /></div>
+                          <button onClick={handleGenerateGlobalReport} className="bg-indigo-600 text-white px-6 py-2 rounded font-bold hover:bg-indigo-700 flex gap-2 items-center"><FileText size={16}/> Generar</button>
+                      </div>
+                  </div>
+              )}
+              {currentSession && (<div className="bg-blue-50 p-6 rounded-lg border border-blue-200 flex justify-between items-center no-print"><div><h3 className="font-bold text-blue-900 text-lg">Turno Actual</h3><p className="text-sm text-blue-800">Ver corte sin cerrar.</p></div><button onClick={() => generateReportData(currentSession, false)} className="bg-blue-600 text-white px-4 py-2 rounded font-bold flex gap-2"><Eye/> VER CORTE PARCIAL</button></div>)}
+              <div className="bg-white p-6 rounded-lg shadow-md no-print">
+                  <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Calendar/> Historial (Últimos 20)</h3>
+                  <table className="w-full text-left border-collapse">
+                      <thead><tr className="bg-gray-100 border-b"><th className="p-3">ID</th><th className="p-3">Fecha</th><th className="p-3">Abierto Por</th><th className="p-3">Cerrado Por</th><th className="p-3">Acción</th></tr></thead>
+                      <tbody>{sessionHistory.map(session => (<tr key={session.id} className="border-b hover:bg-gray-50"><td className="p-3 font-mono">#{session.id}</td><td className="p-3">{new Date(session.closed_at).toLocaleString()}</td><td className="p-3">{session.opened_by}</td><td className="p-3">{session.closed_by}</td><td className="p-3"><button onClick={() => generateReportData(session, true)} className="text-blue-600 hover:underline flex gap-1 items-center font-bold"><Printer size={16}/> Ver</button></td></tr>))}</tbody>
+                  </table>
+              </div>
+          </div>
+      )}
+
+      {lastOrderTicket && !closingData && (
+        <div className="fixed inset-0 bg-black bg-opacity-80 z-[100] flex items-center justify-center no-print">
+            <div className="bg-white p-4 w-80 text-black font-mono text-sm shadow-2xl rounded-lg">
+                <div className="text-center font-bold text-lg border-b border-dashed pb-2 mb-2">{ticketType === 'anexo' ? 'ANEXO / AGREGADO' : 'ORDEN CREADA'}</div>
+                <div className="mb-2">MESA: <span className="font-bold">{lastOrderTicket.info}</span></div>
+                <button onClick={() => window.print()} className="w-full bg-orange-600 text-white p-3 rounded mb-2 font-bold">IMPRIMIR</button>
+                <button onClick={() => setLastOrderTicket(null)} className="w-full bg-gray-200 p-2 rounded">CERRAR</button>
+            </div>
+        </div>
+      )}
+
+      {lastOrderTicket && !closingData && (
+        <div id="ticket-impresion">
+          <div className="ticket-centrado ticket-grande">DONDE MANOLO</div>
+          <div className="ticket-centrado">M&F</div>
+          <div className="ticket-linea"></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>{new Date().toLocaleDateString()}</span><span>{new Date().toLocaleTimeString()}</span></div>
+          <div className="ticket-negrita" style={{ marginTop: '5px' }}>{lastOrderTicket.service_type}: {lastOrderTicket.info}</div>
+          <div className="ticket-linea"></div>
+          <div className="ticket-centrado ticket-negrita">{ticketType === 'anexo' ? '*** ANEXO ***' : 'COMANDA'}</div>
+          <div className="ticket-linea"></div>
+          {lastOrderTicket.items?.map((item, index) => (
+            <div key={index} style={{ marginBottom: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="ticket-negrita" style={{ fontSize: '18px' }}>{item.quantity} x {item.product_name}</span></div>
+                {item.notes && <div style={{ fontSize: '12px', fontStyle: 'italic' }}>(Nota: {item.notes})</div>}
+            </div>
+          ))}
+          <div className="ticket-linea"></div>
+        </div>
+      )}
+
+    {/* --- DOCUMENTOS DE IMPRESION SE MANTIENEN IGUAL --- */}
+    {closingData && !closingData.isGlobal && (
+        <div id="cierre-impresion" className="p-8 font-sans bg-white relative">
+            <div className="no-print absolute top-0 right-0 p-4">
+                <button onClick={() => setClosingData(null)} className="bg-red-600 text-white px-4 py-2 rounded font-bold">Cerrar Visualización</button>
+            </div>
+            
+            <div className="border-b-2 border-black pb-4 mb-6 flex justify-between mt-8">
+                <div>
+                    <h1 className="text-3xl font-bold">REPORTE DETALLADO (V3)</h1>
+                    <p className="text-gray-600">Donde Manolo - Control de Caja</p>
+                    <p className="text-sm font-bold mt-2 bg-yellow-100 inline-block px-2 border border-yellow-300">
+                        Tasa de Cambio: {closingData.tasa_calculo} Bs/$
+                    </p>
+                </div>
+                <div className="text-right text-sm"><p><strong>Apertura:</strong> {closingData.opened_at}</p><p><strong>Cierre:</strong> {closingData.closed_at}</p><p><strong>ID Sesión:</strong> #{closingData.id}</p></div>
+            </div>
+
+            <div className="mb-6 border rounded p-4 bg-gray-50">
+                <h3 className="font-bold text-lg mb-2 border-b border-gray-300">BALANCE GENERAL</h3>
+                <div className="grid grid-cols-2 gap-4 text-lg">
+                    <div>Base Inicial: <span className="font-bold">${Number(closingData.base).toFixed(2)}</span></div>
+                    <div>+ Ventas Totales: <span className="font-bold text-green-700">${closingData.sales.toFixed(2)}</span></div>
+                    <div>- Gastos Registrados: <span className="font-bold text-red-600">${closingData.expenses.toFixed(2)}</span></div>
+                    <div className="border-t border-black pt-2 font-bold text-xl col-span-2">TOTAL EN CAJA: ${closingData.net.toFixed(2)}</div>
+                </div>
+            </div>
+
+            {closingData.sessionExpenses && closingData.sessionExpenses.length > 0 && (
+                <div className="mb-6">
+                    <h3 className="font-bold text-lg mb-2 border-b">GASTOS / SALIDAS</h3>
+                    <table className="w-full text-xs border">
+                        <thead className="bg-gray-100"><tr><th className="p-2 text-left">Hora</th><th className="p-2 text-left">Descripción</th><th className="p-2 text-left">Categoría</th><th className="p-2 text-right">Monto</th></tr></thead>
+                        <tbody>{closingData.sessionExpenses.map(e => (<tr key={e.id} className="border-b"><td className="p-2">{new Date(e.created_at || e.date).toLocaleTimeString()}</td><td className="p-2 font-bold">{e.description}</td><td className="p-2 uppercase">{e.category}</td><td className="p-2 text-right text-red-600 font-bold">${e.amount.toFixed(2)}</td></tr>))}</tbody>
+                    </table>
+                </div>
+            )}
+
+            <div className="mb-6">
+                <h3 className="font-bold text-lg mb-2 border-b">DESGLOSE DE MEDIOS DE PAGO</h3>
+                <table className="w-full text-sm border">
+                    <thead className="bg-gray-100"><tr><th className="p-2 text-left">Método</th><th className="p-2 text-right">Monto USD</th><th className="p-2 text-right">Equivalente Bs</th></tr></thead>
+                    <tbody>
+                        {Object.entries(closingData.breakdown).map(([m, v]) => (
+                            <tr key={m} className="border-b">
+                                <td className="p-2 uppercase font-bold">{m.replace('_', ' ')}</td>
+                                <td className="p-2 text-right font-bold">${v.toFixed(2)}</td>
+                                <td className="p-2 text-right text-gray-600 font-mono">Bs {(v * closingData.tasa_calculo).toFixed(2)}</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            <div className="mb-6 border-2 border-black p-4 rounded bg-white">
+                <h3 className="font-bold text-center text-xl mb-4">💰 ARQUEO DE EFECTIVO</h3>
+                <div className="flex justify-around text-center">
+                    <div><div className="text-sm text-gray-500">EFECTIVO USD (Inc. Base)</div><div className="text-4xl font-bold">${closingData.cashInUsd.toFixed(2)}</div></div>
+                    <div><div className="text-sm text-gray-500">EFECTIVO BOLIVARES</div><div className="text-4xl font-bold">Bs {closingData.cashInBs.toFixed(2)}</div></div>
+                </div>
+            </div>
+            
+            {user.role === 'owner' && (
+                <div className="mt-8 border-t-4 border-black pt-4 page-break">
+                    <h2 className="text-2xl font-bold mb-4 text-center bg-black text-white py-1">DETALLE CONFIDENCIAL (DUEÑO)</h2>
+                    
+                    <div className="grid grid-cols-2 gap-8 mb-6">
+                         <div><h4 className="font-bold border-b mb-2">Ranking Productos</h4><table className="w-full text-xs"><thead><tr><th className="text-left">Producto</th><th className="text-right">Cant.</th></tr></thead><tbody>{Object.entries(closingData.productCount).map(([name, qty]) => (<tr key={name} className="border-b"><td>{name}</td><td className="text-right font-bold">{qty}</td></tr>))}</tbody></table></div>
+                         <div><h4 className="font-bold border-b mb-2">Consumo Insumos</h4><table className="w-full text-xs"><thead><tr><th className="text-left">Insumo</th><th className="text-right">Aprox</th></tr></thead><tbody>{Object.entries(closingData.inventoryUsage).map(([name, qty]) => (<tr key={name} className="border-b"><td>{name}</td><td className="text-right font-bold">{qty.toFixed(2)}</td></tr>))}</tbody></table></div>
+                    </div>
+
+                    <h3 className="font-bold text-lg mb-2 border-b">AUDITORÍA DE MESAS Y COBROS</h3>
+                    <table className="w-full text-xs border">
+                        <thead className="bg-gray-200">
+                            <tr>
+                                <th className="p-1 text-left">Hora</th>
+                                <th className="p-1 text-left">Mesa/Cliente</th>
+                                <th className="p-1 text-left">Consumo (Orden)</th>
+                                <th className="p-1 text-left">Método Pago</th>
+                                <th className="p-1 text-right">Monto</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {closingData.allPayments?.map((p, i) => (
+                                <tr key={i} className="border-b hover:bg-gray-100">
+                                    <td className="p-1">{new Date(p.created_at).toLocaleTimeString()}</td>
+                                    <td className="p-1 font-bold">{p.client_info}</td>
+                                    <td className="p-1 text-gray-600 italic">
+                                        {p.items_detalle && p.items_detalle.length > 0 
+                                            ? p.items_detalle.map(item => `${item.quantity} ${item.product_name}`).join(', ')
+                                            : 'Sin detalle'}
+                                    </td>
+                                    <td className="p-1 uppercase">{p.method?.replace('_', ' ')}</td>
+                                    <td className="p-1 text-right font-bold">${p.amount_usd.toFixed(2)}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+            
+            <div className="mt-12 flex justify-between text-center pt-8">
+                <div className="w-1/3 border-t border-black"><p>Firma Cajero Entrante</p></div>
+                <div className="w-1/3 border-t border-black"><p>Firma Cajero Saliente / Manager</p></div>
+            </div>
+        </div>
+    )}
+
+    {closingData && closingData.isGlobal && (
+        <div id="cierre-impresion" className="p-8 font-sans bg-white relative">
+            <div className="no-print absolute top-0 right-0 p-4">
+                <button onClick={() => setClosingData(null)} className="bg-red-600 text-white px-4 py-2 rounded font-bold">Cerrar Visualización</button>
+            </div>
+            
+            <div className="border-b-2 border-black pb-4 mb-6 flex justify-between mt-8">
+                <div><h1 className="text-3xl font-bold">REPORTE CONSOLIDADO GLOBAL</h1><p className="text-gray-600">Donde Manolo - Gerencia</p></div>
+                <div className="text-right text-sm"><p><strong>Desde:</strong> {closingData.startDate}</p><p><strong>Hasta:</strong> {closingData.endDate}</p><p><strong>Turnos Auditados:</strong> {closingData.sessionsCount}</p></div>
+            </div>
+
+            <div className="mb-6 border rounded p-4 bg-gray-50">
+                <h3 className="font-bold text-lg mb-2 border-b border-gray-300">BALANCE CONSOLIDADO</h3>
+                <div className="grid grid-cols-2 gap-4 text-lg">
+                    <div>Ventas Totales: <span className="font-bold text-green-700">${closingData.sales.toFixed(2)}</span></div>
+                    <div>Gastos Totales: <span className="font-bold text-red-600">${closingData.expenses.toFixed(2)}</span></div>
+                    <div className="border-t border-black pt-2 font-bold text-xl col-span-2 text-center bg-indigo-50 py-2 rounded mt-2">UTILIDAD NETA: ${closingData.net.toFixed(2)}</div>
+                </div>
+            </div>
+
+            <div className="mb-6">
+                <h3 className="font-bold text-lg mb-2 border-b">INGRESOS POR MEDIOS DE PAGO</h3>
+                <table className="w-full text-sm border">
+                    <thead className="bg-gray-100"><tr><th className="p-2 text-left">Método</th><th className="p-2 text-right">Monto</th></tr></thead>
+                    <tbody>{Object.entries(closingData.breakdown).map(([m, v]) => (<tr key={m} className="border-b"><td className="p-2 uppercase">{m.replace('_', ' ')}</td><td className="p-2 text-right font-bold">${v.toFixed(2)}</td></tr>))}</tbody>
+                </table>
+            </div>
+
+            <div className="grid grid-cols-2 gap-8 mb-6">
+                 <div>
+                    <h4 className="font-bold border-b mb-2">Top Productos Vendidos</h4>
+                    <table className="w-full text-xs">
+                        <thead><tr><th className="text-left">Producto</th><th className="text-right">Cant. Total</th></tr></thead>
+                        <tbody>{Object.entries(closingData.productCount).sort((a,b)=>b[1]-a[1]).map(([name, qty]) => (<tr key={name} className="border-b"><td>{name}</td><td className="text-right font-bold text-indigo-700">{qty}</td></tr>))}</tbody>
+                    </table>
+                </div>
+                <div>
+                    <h4 className="font-bold border-b mb-2">Consumo Teórico de Insumos</h4>
+                    <table className="w-full text-xs">
+                        <thead><tr><th className="text-left">Insumo</th><th className="text-right">Gastado Aprox</th></tr></thead>
+                        <tbody>{Object.entries(closingData.inventoryUsage).sort((a,b)=>b[1]-a[1]).map(([name, qty]) => (<tr key={name} className="border-b"><td>{name}</td><td className="text-right font-bold text-red-600">{qty.toFixed(2)}</td></tr>))}</tbody>
+                    </table>
+                </div>
+            </div>
+
+            {closingData.expensesList && closingData.expensesList.length > 0 && (
+                <div className="mb-6 page-break">
+                    <h3 className="font-bold text-lg mb-2 border-b">RESUMEN DE GASTOS / SALIDAS</h3>
+                    <table className="w-full text-xs border">
+                        <thead className="bg-gray-100">
+                            <tr><th className="p-2 text-left">Fecha</th><th className="p-2 text-left">Descripción</th><th className="p-2 text-left">Categoría</th><th className="p-2 text-right">Monto</th></tr>
+                        </thead>
+                        <tbody>
+                            {closingData.expensesList.map(e => (
+                                <tr key={e.id} className="border-b hover:bg-gray-50">
+                                    <td className="p-2">{new Date(e.created_at || e.date).toLocaleDateString()}</td>
+                                    <td className="p-2 font-bold">{e.description}</td>
+                                    <td className="p-2 uppercase">{e.category}</td>
+                                    <td className="p-2 text-right text-red-600 font-bold">${e.amount.toFixed(2)}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
+        </div>
+    )}
+
       <style>{`
         @media print { .no-print { display: none !important; } .page-break { page-break-before: always; } }
         #ticket-impresion { font-family: monospace; width: 80mm; padding: 5px; background: white; color: black; }
