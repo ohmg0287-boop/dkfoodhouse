@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
-import { ShoppingCart, LayoutDashboard, DollarSign, Users, Package, Trash2, Printer, LogOut, Edit3, TrendingDown, TrendingUp, PlusCircle, Save, FileText, Search, XCircle, Lock, Unlock, Calendar, Eye, Bike, Coins, CreditCard } from 'lucide-react';
+import { ShoppingCart, LayoutDashboard, DollarSign, Users, Package, Trash2, Printer, LogOut, Edit3, TrendingDown, TrendingUp, PlusCircle, Save, FileText, Search, XCircle, Lock, Unlock, Calendar, Eye, Bike, Coins, CreditCard, Layers, Plus, Minus } from 'lucide-react';
 
 // --- CONEXIÓN ---
 const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
@@ -24,19 +24,25 @@ export default function DondeManoloApp() {
   const [products, setProducts] = useState([]);
   const [ingredients, setIngredients] = useState([]);
   const [recipes, setRecipes] = useState({});
+  const [combos, setCombos] = useState({});
+  const [comboTableMissing, setComboTableMissing] = useState(false);
   const [orders, setOrders] = useState([]); 
   const [expenses, setExpenses] = useState([]); 
   const [staffList, setStaffList] = useState([]);
   const [paymentMethods, setPaymentMethods] = useState([]); 
   const [newPayMethod, setNewPayMethod] = useState({ name: '', currency: 'USD' });
 
-  // Editor de Inventario / Recetas
+  // Editor de Inventario / Recetas / Combos
   const [invSubView, setInvSubView] = useState('platos'); // INICIA EN PLATOS POR DEFECTO
   const [selectedProductRecipe, setSelectedProductRecipe] = useState('');
   const [newRecipeEntry, setNewRecipeEntry] = useState({ ingredientId: '', quantity: '' });
+  const [selectedCombo, setSelectedCombo] = useState('');
+  const [newComboEntry, setNewComboEntry] = useState({ productName: '', quantity: '1' });
 
   // Operativo
   const [cart, setCart] = useState([]);
+  const [menuSearch, setMenuSearch] = useState('');
+  const [menuFilter, setMenuFilter] = useState('todos'); // todos | platos | combos
   const [serviceInfo, setServiceInfo] = useState({ type: 'Mesa', val: '' });
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [lastOrderTicket, setLastOrderTicket] = useState(null);
@@ -53,6 +59,8 @@ export default function DondeManoloApp() {
   const [currentPayments, setCurrentPayments] = useState([]);
   const [isEditingOrder, setIsEditingOrder] = useState(false); 
   const [itemSearch, setItemSearch] = useState('');
+  const [editAddQty, setEditAddQty] = useState('1');
+  const [editAddNote, setEditAddNote] = useState('');
 
   // Gastos
   const [newExpense, setNewExpense] = useState({ desc: '', amount: '', category: 'Otros', isStock: false, ingredientId: '', quantity: '' });
@@ -81,6 +89,27 @@ export default function DondeManoloApp() {
       if (view === 'reportes') loadHistory();
   }, [view]);
 
+  // --- AUXILIAR DE INVENTARIO (SOPORTA RECETAS Y COMBOS) ---
+  const addIngredientsUsage = (usageMap, productName, qty = 1, visited = new Set()) => {
+      if (!productName || visited.has(productName)) return;
+      const nextVisited = new Set(visited);
+      nextVisited.add(productName);
+
+      const comboComponents = combos[productName];
+      if (comboComponents && comboComponents.length > 0) {
+          comboComponents.forEach(cItem => {
+              addIngredientsUsage(usageMap, cItem.product_name, cItem.quantity * qty, nextVisited);
+          });
+      }
+
+      const productRecipe = recipes[productName];
+      if (productRecipe && productRecipe.length > 0) {
+          productRecipe.forEach(rItem => {
+              usageMap[rItem.ingredientId] = (usageMap[rItem.ingredientId] || 0) + (rItem.quantity * qty);
+          });
+      }
+  };
+
   // --- CARGA DE DATOS ---
   const fetchRate = async () => {
     const { data } = await supabase.from('settings').select('value').eq('key', 'tasa').maybeSingle();
@@ -103,6 +132,7 @@ export default function DondeManoloApp() {
     const p = await supabase.from('products').select('*').order('name');
     const i = await supabase.from('ingredients').select('*').order('name');
     const r = await supabase.from('recipes').select('*');
+    const c = await supabase.from('combo_items').select('*');
     
     const recipesMap = {};
     if (r.data) {
@@ -112,6 +142,18 @@ export default function DondeManoloApp() {
         });
     }
     setRecipes(recipesMap);
+
+    const combosMap = {};
+    if (c.error) {
+        setComboTableMissing(true);
+    } else {
+        setComboTableMissing(false);
+        (c.data || []).forEach(row => {
+            if (!combosMap[row.combo_name]) combosMap[row.combo_name] = [];
+            combosMap[row.combo_name].push({ id: row.id, product_name: row.product_name, quantity: parseFloat(row.quantity) });
+        });
+    }
+    setCombos(combosMap);
 
     if (sessionData) {
         const o = await supabase.from('orders')
@@ -179,7 +221,6 @@ export default function DondeManoloApp() {
       const sessionExpenses = e.data || [];
       const allPayments = p.data || [];
 
-      // Respaldo para pagos/abonos de órdenes que pertenezcan a sesiones anteriores
       const missingOrderIds = [...new Set(
           allPayments
               .filter(pay => pay.order_id && !(pay.orders?.order_items?.length > 0) && !sessionOrders.some(ord => ord.id === pay.order_id))
@@ -208,15 +249,14 @@ export default function DondeManoloApp() {
           ord.order_items.forEach(item => { productCount[item.product_name] = (productCount[item.product_name] || 0) + item.quantity; });
       });
       
-      const inventoryUsage = {};
+      const inventoryUsageById = {};
       for (const [prodName, qty] of Object.entries(productCount)) {
-          const recipe = recipes[prodName];
-          if (recipe) {
-              recipe.forEach(rItem => {
-                  const ing = ingredients.find(i => i.id === rItem.ingredientId);
-                  if (ing) inventoryUsage[ing.name] = (inventoryUsage[ing.name] || 0) + (rItem.quantity * qty);
-              });
-          }
+          addIngredientsUsage(inventoryUsageById, prodName, qty);
+      }
+      const inventoryUsage = {};
+      for (const [ingId, qty] of Object.entries(inventoryUsageById)) {
+          const ing = ingredients.find(i => String(i.id) === String(ingId));
+          if (ing) inventoryUsage[ing.name] = (inventoryUsage[ing.name] || 0) + qty;
       }
 
       const report = {
@@ -283,15 +323,14 @@ export default function DondeManoloApp() {
       const productCount = {};
       (allOrders || []).forEach(o => { o.order_items.forEach(item => { productCount[item.product_name] = (productCount[item.product_name] || 0) + item.quantity; }); });
       
-      const inventoryUsage = {};
+      const inventoryUsageById = {};
       for (const [prodName, qty] of Object.entries(productCount)) {
-          const recipe = recipes[prodName];
-          if (recipe) {
-              recipe.forEach(rItem => {
-                  const ing = ingredients.find(i => i.id === rItem.ingredientId);
-                  if (ing) inventoryUsage[ing.name] = (inventoryUsage[ing.name] || 0) + (rItem.quantity * qty);
-              });
-          }
+          addIngredientsUsage(inventoryUsageById, prodName, qty);
+      }
+      const inventoryUsage = {};
+      for (const [ingId, qty] of Object.entries(inventoryUsageById)) {
+          const ing = ingredients.find(i => String(i.id) === String(ingId));
+          if (ing) inventoryUsage[ing.name] = (inventoryUsage[ing.name] || 0) + qty;
       }
 
       const report = { isGlobal: true, startDate: globalReportDates.start, endDate: globalReportDates.end, sessionsCount: sessions.length, sales: dineroCobrado, expenses: totalExpenses, net, breakdown, productCount, inventoryUsage, expensesList: allExpenses || [] };
@@ -312,18 +351,15 @@ export default function DondeManoloApp() {
     if (processing || cart.length === 0 || !serviceInfo.val) return alert("Falta info");
     setProcessing(true); setLoading(true);
     try {
-        const total = cart.reduce((sum, item) => sum + item.price_usd, 0);
+        const total = cart.reduce((sum, item) => sum + (item.price_usd * (item.quantity || 1)), 0);
         const { data: order, error } = await supabase.from('orders').insert([{ total_usd: total, service_type: serviceInfo.type, info: serviceInfo.val, created_by: user.name, status: 'pendiente', session_id: currentSession.id }]).select().single();
         if (error) throw error;
-        const items = cart.map(i => ({ order_id: order.id, product_name: i.name, quantity: 1, price_at_time: i.price_usd, notes: i.notes || '' }));
+        const items = cart.map(i => ({ order_id: order.id, product_name: i.name, quantity: i.quantity || 1, price_at_time: i.price_usd, notes: i.notes || '' }));
         await supabase.from('order_items').insert(items);
         
         const inventoryUsage = {};
         for (let item of cart) {
-            const productRecipe = recipes[item.name];
-            if (productRecipe) { 
-                for (let ingItem of productRecipe) { inventoryUsage[ingItem.ingredientId] = (inventoryUsage[ingItem.ingredientId] || 0) + ingItem.quantity; } 
-            }
+            addIngredientsUsage(inventoryUsage, item.name, item.quantity || 1);
         }
         for (const [ingId, qtyDeduct] of Object.entries(inventoryUsage)) {
             const { data: freshData } = await supabase.from('ingredients').select('stock').eq('id', ingId).single();
@@ -392,10 +428,7 @@ export default function DondeManoloApp() {
           if (items) {
               const inventoryToReturn = {};
               for (let item of items) {
-                  const productRecipe = recipes[item.product_name];
-                  if (productRecipe) {
-                      for (let ingItem of productRecipe) { inventoryToReturn[ingItem.ingredientId] = (inventoryToReturn[ingItem.ingredientId] || 0) + ingItem.quantity; }
-                  }
+                  addIngredientsUsage(inventoryToReturn, item.product_name, item.quantity || 1);
               }
               for (const [ingId, qtyReturn] of Object.entries(inventoryToReturn)) {
                   const { data: freshData } = await supabase.from('ingredients').select('stock').eq('id', ingId).single();
@@ -437,7 +470,7 @@ export default function DondeManoloApp() {
     loadData();
   };
 
-  // --- NUEVAS FUNCIONES DE PLATOS ---
+  // --- FUNCIONES DE PLATOS ---
   const handleAddProduct = async () => {
       const n = prompt("Nombre del Plato:");
       if (n) {
@@ -455,8 +488,68 @@ export default function DondeManoloApp() {
       if (user.role !== 'owner') return;
       if (!confirm("¿Eliminar plato?")) return;
       setLoading(true);
+      const target = products.find(p => p.id === id);
+      if (target && !comboTableMissing) {
+          await supabase.from('combo_items').delete().eq('combo_name', target.name);
+      }
       await supabase.from('products').delete().eq('id', id);
+      if (target && selectedCombo === target.name) setSelectedCombo('');
       loadData();
+      setLoading(false);
+  };
+
+  // --- FUNCIONES DE COMBOS ---
+  const handleCreateCombo = async () => {
+      if (comboTableMissing) return alert("Primero ejecuta el script SQL de la tabla combo_items en Supabase.");
+      const n = prompt("Nombre del Combo (Ej: Combo Familiar DK):");
+      if (!n || !n.trim()) return;
+      const p = prompt("Precio del Combo ($):");
+      if (!p || isNaN(p)) return;
+      setLoading(true);
+      const { error } = await supabase.from('products').insert([{ name: n.trim(), price_usd: parseFloat(p) }]);
+      if (error) {
+          alert("Error al crear combo: " + error.message);
+      } else {
+          setSelectedCombo(n.trim());
+          await loadData();
+      }
+      setLoading(false);
+  };
+
+  const handleAddItemToCombo = async () => {
+      if (!selectedCombo || !newComboEntry.productName) return;
+      const qty = parseFloat(newComboEntry.quantity);
+      if (!qty || qty <= 0) return alert("Cantidad inválida");
+      setLoading(true);
+      const { error } = await supabase.from('combo_items').insert([{
+          combo_name: selectedCombo,
+          product_name: newComboEntry.productName,
+          quantity: qty
+      }]);
+      if (error) alert("Error: " + error.message);
+      else {
+          setNewComboEntry({ productName: '', quantity: '1' });
+          await loadData();
+      }
+      setLoading(false);
+  };
+
+  const handleRemoveComboItem = async (id) => {
+      if (!confirm("¿Quitar este plato del combo?")) return;
+      setLoading(true);
+      await supabase.from('combo_items').delete().eq('id', id);
+      await loadData();
+      setLoading(false);
+  };
+
+  const handleDeleteComboComplete = async (comboName) => {
+      if (user.role !== 'owner') return;
+      if (!confirm(`¿Eliminar el combo "${comboName}" del menú?`)) return;
+      setLoading(true);
+      await supabase.from('combo_items').delete().eq('combo_name', comboName);
+      await supabase.from('products').delete().eq('name', comboName);
+      if (selectedCombo === comboName) setSelectedCombo('');
+      await loadData();
       setLoading(false);
   };
 
@@ -476,44 +569,74 @@ export default function DondeManoloApp() {
 
   const handleAddItemToOrder = async (product) => { 
       if (!selectedOrder || processing) return;
-      if (!confirm(`¿Agregar ${product.name}?`)) return;
+      const qty = Math.max(1, parseInt(editAddQty) || 1);
+      const noteText = editAddNote.trim() ? `ANEXO: ${editAddNote.trim()}` : 'ANEXO';
+      if (!confirm(`¿Agregar ${qty} x ${product.name}?`)) return;
       setProcessing(true); setLoading(true);
       try {
-          await supabase.from('order_items').insert([{ order_id: selectedOrder.id, product_name: product.name, quantity: 1, price_at_time: product.price_usd, notes: 'ANEXO' }]);
-          await supabase.from('orders').update({ total_usd: selectedOrder.total_usd + product.price_usd, status: selectedOrder.status === 'credito' ? 'credito' : 'pendiente' }).eq('id', selectedOrder.id);
-          const productRecipe = recipes[product.name];
-          if (productRecipe) { 
-              for (let ingItem of productRecipe) { 
-                  const { data: freshData } = await supabase.from('ingredients').select('stock').eq('id', ingItem.ingredientId).single();
-                  if (freshData) { await supabase.from('ingredients').update({ stock: parseFloat(freshData.stock) - ingItem.quantity }).eq('id', ingItem.ingredientId); }
-              } 
+          await supabase.from('order_items').insert([{ order_id: selectedOrder.id, product_name: product.name, quantity: qty, price_at_time: product.price_usd, notes: noteText }]);
+          await supabase.from('orders').update({ total_usd: selectedOrder.total_usd + (product.price_usd * qty), status: selectedOrder.status === 'credito' ? 'credito' : 'pendiente' }).eq('id', selectedOrder.id);
+          const inventoryUsage = {};
+          addIngredientsUsage(inventoryUsage, product.name, qty);
+          for (const [ingId, qtyDeduct] of Object.entries(inventoryUsage)) { 
+              const { data: freshData } = await supabase.from('ingredients').select('stock').eq('id', ingId).single();
+              if (freshData) { await supabase.from('ingredients').update({ stock: parseFloat(freshData.stock) - qtyDeduct }).eq('id', ingId); }
           }
+          setEditAddQty('1');
+          setEditAddNote('');
           alert("Agregado");
-          if(confirm("¿Imprimir Ticket?")) { setClosingData(null); setTicketType('anexo'); setLastOrderTicket({ ...selectedOrder, items: [{ product_name: product.name, quantity: 1, notes: 'ANEXO' }] }); setTimeout(() => window.print(), 500); }
+          if(confirm("¿Imprimir Ticket?")) { setClosingData(null); setTicketType('anexo'); setLastOrderTicket({ ...selectedOrder, items: [{ product_name: product.name, quantity: qty, notes: noteText }] }); setTimeout(() => window.print(), 500); }
           fetchOrders();
       } catch (e) { alert("Error: " + e.message); } finally { setProcessing(false); setLoading(false); }
   };
 
   const handleRemoveItemFromOrder = async (item) => { 
-      if (processing || !confirm(`¿Eliminar ${item.product_name}?`)) return;
+      if (processing || !confirm(`¿Eliminar ${item.quantity || 1} x ${item.product_name}?`)) return;
       setProcessing(true); setLoading(true);
       try {
+        const itemQty = item.quantity || 1;
         await supabase.from('order_items').delete().eq('id', item.id);
-        await supabase.from('orders').update({ total_usd: Math.max(0, selectedOrder.total_usd - item.price_at_time) }).eq('id', selectedOrder.id);
-        const productRecipe = recipes[item.product_name];
-        if (productRecipe) { 
-            for (let ingItem of productRecipe) { 
-                const { data: freshData } = await supabase.from('ingredients').select('stock').eq('id', ingItem.ingredientId).single();
-                if (freshData) { await supabase.from('ingredients').update({ stock: parseFloat(freshData.stock) + ingItem.quantity }).eq('id', ingItem.ingredientId); }
-            } 
+        await supabase.from('orders').update({ total_usd: Math.max(0, selectedOrder.total_usd - (item.price_at_time * itemQty)) }).eq('id', selectedOrder.id);
+        const inventoryToReturn = {};
+        addIngredientsUsage(inventoryToReturn, item.product_name, itemQty);
+        for (const [ingId, qtyReturn] of Object.entries(inventoryToReturn)) { 
+            const { data: freshData } = await supabase.from('ingredients').select('stock').eq('id', ingId).single();
+            if (freshData) { await supabase.from('ingredients').update({ stock: parseFloat(freshData.stock) + qtyReturn }).eq('id', ingId); }
         }
         fetchOrders();
-        } catch (e) { alert("Error: " + e.message); } finally { setProcessing(false); setLoading(false); }
+      } catch (e) { alert("Error: " + e.message); } finally { setProcessing(false); setLoading(false); }
   };
 
-  const addToCart = (product) => setCart(prev => [...prev, { ...product, tempId: Date.now() + Math.random() }]);
+  // --- FUNCIONES DEL CARRITO (COMANDA CON CANTIDADES Y DETALLES) ---
+  const addToCart = (product) => {
+      setCart(prev => {
+          const existingIdx = prev.findIndex(item => item.id === product.id && (!item.notes || item.notes.trim() === ''));
+          if (existingIdx !== -1) {
+              return prev.map((item, idx) => idx === existingIdx ? { ...item, quantity: (item.quantity || 1) + 1 } : item);
+          }
+          return [...prev, { ...product, quantity: 1, notes: '', tempId: Date.now() + Math.random() }];
+      });
+  };
+  const duplicateCartItem = (item) => {
+      setCart(prev => {
+          const idx = prev.findIndex(c => c.tempId === item.tempId);
+          const newEntry = { id: item.id, name: item.name, price_usd: item.price_usd, quantity: 1, notes: '', tempId: Date.now() + Math.random() };
+          if (idx === -1) return [...prev, newEntry];
+          const copy = [...prev];
+          copy.splice(idx + 1, 0, newEntry);
+          return copy;
+      });
+  };
+  const updateCartQuantity = (tempId, newQty) => {
+      const parsed = Math.max(1, parseInt(newQty) || 1);
+      setCart(prev => prev.map(item => item.tempId === tempId ? { ...item, quantity: parsed } : item));
+  };
   const removeFromCart = (tempId) => setCart(prev => prev.filter(item => item.tempId !== tempId));
   const updateCartNote = (tempId, note) => setCart(prev => prev.map(item => item.tempId === tempId ? { ...item, notes: note } : item));
+
+  const isComboProduct = (productName) => Boolean(combos[productName] && combos[productName].length > 0);
+  const cartTotalUsd = cart.reduce((sum, item) => sum + (item.price_usd * (item.quantity || 1)), 0);
+  const cartTotalItems = cart.reduce((sum, item) => sum + (item.quantity || 1), 0);
   
   if (!user) return (
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center text-white">
@@ -532,7 +655,7 @@ export default function DondeManoloApp() {
       {/* ALERTA DE VERSION */}
       {showVersionAlert && (
         <div className="fixed top-0 left-0 w-full bg-green-500 text-white text-center p-2 font-bold z-[9999]">
-          VERSIÓN ACTUALIZADA V4 - CRÉDITOS Y MÉTODOS DE PAGO + GESTOR DE PLATOS
+          VERSIÓN ACTUALIZADA V5 - COMBOS + BUSCADOR DE MENÚ + COMANDAS CON CANTIDADES
         </div>
       )}
 
@@ -666,10 +789,11 @@ export default function DondeManoloApp() {
 
       {view === 'inventario' && (
             <div className="max-w-7xl mx-auto p-4 bg-white rounded shadow-lg">
-                <div className="flex justify-between items-center mb-6 no-print">
+                <div className="flex flex-wrap justify-between items-center mb-6 gap-3 no-print">
                     <h2 className="text-2xl font-bold">Inventario</h2>
                     <div className="flex gap-4">
                         <button onClick={() => setInvSubView('platos')} className={`font-bold ${invSubView==='platos'?'text-yellow-600 border-b-2 border-yellow-600':''}`}>PLATOS</button>
+                        <button onClick={() => setInvSubView('combos')} className={`font-bold flex items-center gap-1 ${invSubView==='combos'?'text-yellow-600 border-b-2 border-yellow-600':''}`}><Layers size={16}/> COMBOS</button>
                         <button onClick={() => setInvSubView('insumos')} className={`font-bold ${invSubView==='insumos'?'text-yellow-600 border-b-2 border-yellow-600':''}`}>INSUMOS</button>
                         <button onClick={() => setInvSubView('recetas')} className={`font-bold ${invSubView==='recetas'?'text-yellow-600 border-b-2 border-yellow-600':''}`}>RECETAS</button>
                     </div>
@@ -684,7 +808,10 @@ export default function DondeManoloApp() {
                             <thead><tr className="bg-gray-100 border-b"><th className="p-3">Plato</th><th className="p-3">Precio ($)</th>{user.role === 'owner' && <th className="p-3 no-print">Acciones</th>}</tr></thead>
                             <tbody>{products.map(p => (
                                 <tr key={p.id} className="border-b hover:bg-gray-50">
-                                    <td className="p-3 font-bold">{p.name}</td>
+                                    <td className="p-3 font-bold">
+                                        {p.name}
+                                        {isComboProduct(p.name) && <span className="ml-2 text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded font-bold">COMBO</span>}
+                                    </td>
                                     <td className="p-3 text-green-600 font-bold">${p.price_usd}</td>
                                     {user.role === 'owner' && (
                                         <td className="p-3 no-print flex gap-2">
@@ -695,6 +822,105 @@ export default function DondeManoloApp() {
                                 </tr>
                             ))}</tbody>
                         </table>
+                    </div>
+                )}
+
+                {invSubView === 'combos' && (
+                    <div>
+                        {comboTableMissing && (
+                            <div className="mb-4 p-4 bg-yellow-50 border border-yellow-400 text-yellow-900 rounded text-sm">
+                                <strong>Falta la tabla <code>combo_items</code> en Supabase.</strong> Ejecuta el script SQL en tu SQL Editor de Supabase y recarga la página para guardar combos.
+                            </div>
+                        )}
+                        <div className="mb-4 flex flex-wrap justify-between items-center gap-3">
+                            <div className="text-sm text-gray-600">Arma combos con platos existentes. Al vender un combo se descuentan automáticamente las recetas de cada plato que incluye.</div>
+                            <button onClick={handleCreateCombo} className="bg-green-600 text-white px-4 py-2 rounded text-sm font-bold flex items-center gap-1 hover:bg-green-700"><PlusCircle size={16}/> Nuevo Combo</button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div className="border-r pr-4 space-y-2 max-h-[60vh] overflow-y-auto">
+                                <div className="text-xs font-bold text-gray-500 uppercase mb-2">Combos Activos</div>
+                                {(() => {
+                                    const comboProducts = products.filter(p => isComboProduct(p.name) || p.name === selectedCombo);
+                                    if (comboProducts.length === 0) {
+                                        return <div className="text-sm text-gray-400 italic py-4">Aún no hay combos configurados. Crea uno con "+ Nuevo Combo" o elige un plato abajo.</div>;
+                                    }
+                                    return comboProducts.map(p => (
+                                        <div key={p.id} onClick={() => setSelectedCombo(p.name)} className={`cursor-pointer p-3 rounded border flex justify-between items-center ${selectedCombo === p.name ? 'bg-yellow-500 text-white border-yellow-600' : 'hover:bg-gray-100 text-gray-800'}`}>
+                                            <div>
+                                                <div className="font-bold">{p.name}</div>
+                                                <div className={`text-xs ${selectedCombo === p.name ? 'text-yellow-100' : 'text-green-600 font-bold'}`}>${p.price_usd} • {(combos[p.name] || []).length} ítems</div>
+                                            </div>
+                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteComboComplete(p.name); }} className={`p-1 rounded ${selectedCombo === p.name ? 'text-white hover:bg-yellow-600' : 'text-red-500 hover:bg-red-50'}`}><Trash2 size={16}/></button>
+                                        </div>
+                                    ));
+                                })()}
+
+                                <div className="pt-4 border-t mt-4">
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">O configurar un plato existente como combo:</label>
+                                    <select className="w-full border p-2 rounded text-sm bg-white" value="" onChange={e => { if (e.target.value) setSelectedCombo(e.target.value); }}>
+                                        <option value="">Seleccionar del menú...</option>
+                                        {products.filter(p => !isComboProduct(p.name)).map(p => (
+                                            <option key={p.id} value={p.name}>{p.name} (${p.price_usd})</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div className="md:col-span-2">
+                                {selectedCombo ? (() => {
+                                    const comboProd = products.find(p => p.name === selectedCombo);
+                                    const currentItems = combos[selectedCombo] || [];
+                                    const sumIndividual = currentItems.reduce((sum, ci) => {
+                                        const sub = products.find(p => p.name === ci.product_name);
+                                        return sum + ((sub?.price_usd || 0) * ci.quantity);
+                                    }, 0);
+
+                                    return (
+                                        <>
+                                            <div className="flex flex-wrap justify-between items-center border-b pb-3 mb-4 gap-2">
+                                                <div>
+                                                    <h3 className="font-bold text-xl">Combo: <span className="text-yellow-600">{selectedCombo}</span></h3>
+                                                    <div className="text-sm text-gray-600">
+                                                        Precio Combo: <strong className="text-green-600">${comboProd?.price_usd ?? 0}</strong>
+                                                        {sumIndividual > 0 && <span className="ml-3">Valor por separado: <strong>${sumIndividual.toFixed(2)}</strong></span>}
+                                                    </div>
+                                                </div>
+                                                {comboProd && (
+                                                    <button onClick={async () => { const v = prompt("Nuevo Precio del Combo ($):", comboProd.price_usd); if(v && !isNaN(v)) { await supabase.from('products').update({price_usd: parseFloat(v)}).eq('id', comboProd.id); loadData(); }}} className="text-blue-600 border border-blue-200 hover:bg-blue-50 px-3 py-1 rounded text-sm font-bold flex items-center gap-1"><Edit3 size={14}/> Editar Precio</button>
+                                                )}
+                                            </div>
+
+                                            <div className="bg-gray-50 p-3 rounded mb-4 flex flex-wrap gap-2 shadow-sm">
+                                                <select className="flex-1 min-w-[200px] border p-2 rounded bg-white" value={newComboEntry.productName} onChange={e => setNewComboEntry({...newComboEntry, productName: e.target.value})}>
+                                                    <option value="">Seleccione plato / bebida a incluir...</option>
+                                                    {products.filter(p => p.name !== selectedCombo).map(p => (
+                                                        <option key={p.id} value={p.name}>{p.name} (${p.price_usd})</option>
+                                                    ))}
+                                                </select>
+                                                <input type="number" min="1" placeholder="Cant." className="w-24 border p-2 rounded" value={newComboEntry.quantity} onChange={e => setNewComboEntry({...newComboEntry, quantity: e.target.value})} />
+                                                <button onClick={handleAddItemToCombo} className="bg-yellow-600 hover:bg-yellow-700 text-white px-4 py-2 rounded font-bold flex items-center gap-1"><PlusCircle size={18}/> Agregar</button>
+                                            </div>
+
+                                            <table className="w-full text-md border">
+                                                <thead><tr className="bg-gray-100 border-b text-sm"><th className="p-3 text-left">Incluye</th><th className="p-3 text-left">Cantidad</th><th className="p-3 text-right">Acción</th></tr></thead>
+                                                <tbody>
+                                                    {currentItems.length === 0 ? (
+                                                        <tr><td colSpan="3" className="p-4 text-center text-gray-400 italic">Agrega los platos o bebidas que forman este combo.</td></tr>
+                                                    ) : currentItems.map(cItem => (
+                                                        <tr key={cItem.id} className="border-b hover:bg-gray-50">
+                                                            <td className="p-3 font-bold">{cItem.product_name}</td>
+                                                            <td className="p-3 font-bold text-blue-700">{cItem.quantity} und</td>
+                                                            <td className="p-3 text-right"><button onClick={() => handleRemoveComboItem(cItem.id)} className="text-red-500 hover:bg-red-50 p-2 rounded"><Trash2 size={16}/></button></td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </>
+                                    );
+                                })() : <div className="text-gray-400 italic text-center mt-10">Selecciona un combo de la izquierda o crea uno nuevo para armarlo</div>}
+                            </div>
+                        </div>
                     </div>
                 )}
 
@@ -725,22 +951,106 @@ export default function DondeManoloApp() {
         )}
 
       {view === 'pedidos' && (
-          <div className="max-w-7xl mx-auto p-4 grid grid-cols-1 md:grid-cols-3 gap-6 h-[80vh]">
-              <div className="md:col-span-2 overflow-y-auto bg-white p-4 rounded shadow-lg">
-                  <h2 className="font-bold text-xl mb-4">Menú</h2>
-                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-                      {products.map(p => (
-                          <div key={p.id} onClick={() => addToCart(p)} className="cursor-pointer border hover:border-yellow-500 p-4 rounded-lg bg-gray-50 hover:bg-yellow-50 transition transform hover:scale-105">
-                              <h3 className="font-bold text-gray-800">{p.name}</h3><p className="text-green-600 font-bold">${p.price_usd}</p>
-                          </div>
-                      ))}
+          <div className="max-w-7xl mx-auto p-4 grid grid-cols-1 md:grid-cols-3 gap-6 md:h-[82vh]">
+              <div className="md:col-span-2 flex flex-col bg-white p-4 rounded shadow-lg overflow-hidden">
+                  <div className="flex flex-wrap justify-between items-center gap-2 mb-3">
+                      <h2 className="font-bold text-xl">Menú</h2>
+                      <div className="flex gap-1 text-xs">
+                          <button onClick={() => setMenuFilter('todos')} className={`px-3 py-1 rounded-full font-bold ${menuFilter === 'todos' ? 'bg-gray-900 text-yellow-400' : 'bg-gray-100 text-gray-600'}`}>Todos</button>
+                          <button onClick={() => setMenuFilter('platos')} className={`px-3 py-1 rounded-full font-bold ${menuFilter === 'platos' ? 'bg-gray-900 text-yellow-400' : 'bg-gray-100 text-gray-600'}`}>Platos</button>
+                          <button onClick={() => setMenuFilter('combos')} className={`px-3 py-1 rounded-full font-bold ${menuFilter === 'combos' ? 'bg-yellow-500 text-white' : 'bg-gray-100 text-gray-600'}`}>Combos</button>
+                      </div>
+                  </div>
+                  <div className="relative mb-4">
+                      <Search className="absolute left-3 top-2.5 text-gray-400" size={18}/>
+                      <input
+                          type="text"
+                          placeholder="Buscar plato o combo en el menú..."
+                          className="border p-2 pl-10 pr-10 rounded-lg w-full bg-gray-50 focus:bg-white focus:outline-none focus:border-yellow-500"
+                          value={menuSearch}
+                          onChange={e => setMenuSearch(e.target.value)}
+                      />
+                      {menuSearch && (
+                          <button onClick={() => setMenuSearch('')} className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600">
+                              <XCircle size={18}/>
+                          </button>
+                      )}
+                  </div>
+                  <div className="overflow-y-auto flex-1 pr-1">
+                      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                          {products
+                              .filter(p => {
+                                  const matchSearch = p.name.toLowerCase().includes(menuSearch.trim().toLowerCase());
+                                  const isCombo = isComboProduct(p.name);
+                                  const matchFilter = menuFilter === 'todos' || (menuFilter === 'combos' ? isCombo : !isCombo);
+                                  return matchSearch && matchFilter;
+                              })
+                              .map(p => {
+                                  const comboList = combos[p.name];
+                                  return (
+                                  <div key={p.id} onClick={() => addToCart(p)} className={`cursor-pointer border p-4 rounded-lg transition transform hover:scale-[1.02] ${comboList?.length ? 'bg-yellow-50 border-yellow-300 hover:border-yellow-500' : 'bg-gray-50 hover:border-yellow-500 hover:bg-yellow-50'}`}>
+                                      <div className="flex justify-between items-start gap-1">
+                                          <h3 className="font-bold text-gray-800 leading-tight">{p.name}</h3>
+                                          {comboList?.length > 0 && <span className="text-[10px] bg-yellow-500 text-white px-1.5 py-0.5 rounded font-bold shrink-0">COMBO</span>}
+                                      </div>
+                                      <p className="text-green-600 font-bold mt-1">${p.price_usd}</p>
+                                      {comboList?.length > 0 && (
+                                          <p className="text-[11px] text-gray-600 mt-1 leading-snug">
+                                              {comboList.map(c => `${c.quantity}x ${c.product_name}`).join(' + ')}
+                                          </p>
+                                      )}
+                                  </div>
+                              );})}
+                      </div>
                   </div>
               </div>
               <div className="bg-white p-4 rounded shadow-lg flex flex-col h-full">
-                  <h2 className="font-bold text-xl mb-2">Comanda</h2>
-                  <div className="flex gap-2 mb-4"><select className="border p-2 rounded" onChange={e => setServiceInfo({...serviceInfo, type: e.target.value})}><option>Mesa</option><option>Para Llevar</option><option>Delivery</option></select><input placeholder="Cliente/Mesa" className="border p-2 rounded w-full" onChange={e => setServiceInfo({...serviceInfo, val: e.target.value})} value={serviceInfo.val} /></div>
-                  <div className="flex-1 overflow-y-auto border-t py-2">{cart.map(item => (<div key={item.tempId} className="flex justify-between border-b py-2 text-sm"><div><span className="font-bold">{item.name}</span> <div className="text-xs text-gray-500">${item.price_usd}</div><input placeholder="Notas..." className="text-xs border-b w-full mt-1 bg-transparent" value={item.notes || ''} onChange={e => updateCartNote(item.tempId, e.target.value)} /></div><button onClick={() => removeFromCart(item.tempId)} className="text-red-500"><Trash2 size={16}/></button></div>))}</div>
-                  <div className="pt-4 border-t"><button onClick={sendOrder} disabled={!currentSession} className="w-full bg-green-600 text-white py-3 rounded-lg font-bold text-lg disabled:bg-gray-400">{!currentSession ? 'CAJA CERRADA' : 'ENVIAR A COCINA'}</button></div>
+                  <div className="flex justify-between items-center mb-2">
+                      <h2 className="font-bold text-xl">Comanda</h2>
+                      {cartTotalItems > 0 && <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded-full font-bold">{cartTotalItems} ítems</span>}
+                  </div>
+                  <div className="flex gap-2 mb-3">
+                      <select className="border p-2 rounded bg-white" value={serviceInfo.type} onChange={e => setServiceInfo({...serviceInfo, type: e.target.value})}>
+                          <option>Mesa</option><option>Para Llevar</option><option>Delivery</option>
+                      </select>
+                      <input placeholder="Cliente/Mesa" className="border p-2 rounded w-full" onChange={e => setServiceInfo({...serviceInfo, val: e.target.value})} value={serviceInfo.val} />
+                  </div>
+                  <div className="flex-1 overflow-y-auto border-t py-2 space-y-2">
+                      {cart.length === 0 ? (
+                          <div className="text-gray-400 text-center text-sm italic mt-10">Toca los platos del menú para agregarlos. Puedes ajustar cantidades y detalles aquí.</div>
+                      ) : cart.map(item => (
+                          <div key={item.tempId} className="border rounded-lg p-2.5 bg-gray-50 text-sm">
+                              <div className="flex justify-between items-start gap-2">
+                                  <div className="flex-1">
+                                      <div className="font-bold text-gray-800 leading-tight">{item.name}</div>
+                                      <div className="text-xs text-green-700 font-bold">${(item.price_usd * (item.quantity || 1)).toFixed(2)} <span className="text-gray-400 font-normal">(${item.price_usd} c/u)</span></div>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                      <button onClick={() => updateCartQuantity(item.tempId, (item.quantity || 1) - 1)} className="bg-gray-200 hover:bg-gray-300 p-1 rounded"><Minus size={14}/></button>
+                                      <input type="number" min="1" value={item.quantity || 1} onChange={e => updateCartQuantity(item.tempId, e.target.value)} className="w-10 text-center border rounded font-bold py-0.5 bg-white" />
+                                      <button onClick={() => updateCartQuantity(item.tempId, (item.quantity || 1) + 1)} className="bg-gray-200 hover:bg-gray-300 p-1 rounded"><Plus size={14}/></button>
+                                      <button onClick={() => removeFromCart(item.tempId)} className="text-red-500 hover:bg-red-50 p-1 rounded ml-1"><Trash2 size={16}/></button>
+                                  </div>
+                              </div>
+                              <div className="flex gap-1 mt-2 items-center">
+                                  <input placeholder="Detalles / Notas (ej: 2 sin cebolla, 1 full salsa)..." className="text-xs border rounded px-2 py-1 w-full bg-white" value={item.notes || ''} onChange={e => updateCartNote(item.tempId, e.target.value)} />
+                                  <button onClick={() => duplicateCartItem(item)} title="Separar otra línea del mismo plato con distinta nota" className="text-[11px] bg-blue-100 text-blue-700 hover:bg-blue-200 px-2 py-1 rounded font-bold shrink-0">+ Nota</button>
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+                  <div className="pt-3 border-t space-y-2">
+                      {cart.length > 0 && (
+                          <div className="flex justify-between items-center bg-gray-900 text-white px-3 py-2 rounded-lg">
+                              <span className="text-xs uppercase text-gray-300">Total Estimado</span>
+                              <div className="text-right">
+                                  <div className="font-bold text-lg text-yellow-400">${cartTotalUsd.toFixed(2)}</div>
+                                  {tasa > 0 && <div className="text-[11px] text-gray-300">Bs {(cartTotalUsd * tasa).toFixed(2)}</div>}
+                              </div>
+                          </div>
+                      )}
+                      <button onClick={sendOrder} disabled={!currentSession} className="w-full bg-green-600 text-white py-3 rounded-lg font-bold text-lg disabled:bg-gray-400">{!currentSession ? 'CAJA CERRADA' : 'ENVIAR A COCINA'}</button>
+                  </div>
               </div>
           </div>
       )}
@@ -750,7 +1060,21 @@ export default function DondeManoloApp() {
               {orders.filter(o => o.status === 'pendiente').map(o => (
                   <div key={o.id} className="bg-white rounded-lg shadow-md overflow-hidden border-l-8 border-yellow-500">
                       <div className="bg-yellow-50 p-3 border-b border-yellow-100 flex justify-between items-center"><span className="font-bold text-lg text-gray-800">{o.service_type}</span><span className="text-sm font-bold bg-white px-2 rounded border">{o.info}</span></div>
-                      <div className="p-4"><ul className="space-y-3">{o.order_items.map(item => (<li key={item.id} className="text-gray-800 leading-tight"><div className="font-bold text-lg">• {item.product_name}</div>{item.notes && <div className="text-red-600 text-sm bg-red-50 p-1 rounded mt-1">📝 {item.notes}</div>}</li>))}</ul></div>
+                      <div className="p-4">
+                          <ul className="space-y-3">
+                              {o.order_items.map(item => (
+                                  <li key={item.id} className="text-gray-800 leading-tight">
+                                      <div className="font-bold text-lg">• {item.quantity || 1} x {item.product_name}</div>
+                                      {combos[item.product_name]?.length > 0 && (
+                                          <div className="text-xs text-gray-500 pl-3">
+                                              ({combos[item.product_name].map(c => `${c.quantity * (item.quantity || 1)}x ${c.product_name}`).join(', ')})
+                                          </div>
+                                      )}
+                                      {item.notes && <div className="text-red-600 text-sm bg-red-50 p-1 rounded mt-1">📝 {item.notes}</div>}
+                                  </li>
+                              ))}
+                          </ul>
+                      </div>
                       <div className="flex">
                          <button onClick={async () => { await supabase.from('orders').update({status:'listo'}).eq('id', o.id); fetchOrders(); }} className="flex-1 bg-green-600 text-white font-bold py-3 hover:bg-green-700">MARCAR LISTO ✅</button>
                          <button onClick={() => { setClosingData(null); setTicketType('full'); setLastOrderTicket({ ...o, items: o.order_items || [] }); setTimeout(()=>window.print(), 300); }} className="bg-gray-700 text-white px-4"><Printer size={20}/></button>
@@ -888,8 +1212,39 @@ export default function DondeManoloApp() {
                           </>
                       ) : (
                           <>
-                              <div className="max-h-60 overflow-y-auto mb-4 border rounded">{selectedOrder.order_items?.map(item => (<div key={item.id} className="flex justify-between items-center p-2 border-b bg-white"><div><div className="font-bold text-sm">{item.product_name}</div><div className="text-xs text-gray-500">${item.price_at_time}</div></div><button onClick={() => handleRemoveItemFromOrder(item)} disabled={processing} className="text-red-500 hover:bg-red-50 p-2 rounded disabled:opacity-30"><XCircle size={20}/></button></div>))}</div>
-                              <div className="border-t pt-4"><div className="flex items-center gap-2 mb-2"><Search className="text-gray-400"/><input className="border p-2 rounded w-full" placeholder="Buscar..." value={itemSearch} onChange={e => setItemSearch(e.target.value)} /></div><div className="grid grid-cols-2 gap-2 h-32 overflow-y-auto">{products.filter(p => p.name.toLowerCase().includes(itemSearch.toLowerCase())).map(p => (<button key={p.id} disabled={processing} onClick={() => handleAddItemToOrder(p)} className="text-xs p-2 border rounded hover:bg-green-50 text-left disabled:opacity-50"><div className="font-bold">{p.name}</div><div className="text-green-600">${p.price_usd}</div></button>))}</div></div>
+                              <div className="max-h-60 overflow-y-auto mb-4 border rounded">
+                                  {selectedOrder.order_items?.map(item => (
+                                      <div key={item.id} className="flex justify-between items-center p-2 border-b bg-white">
+                                          <div>
+                                              <div className="font-bold text-sm">{item.quantity || 1} x {item.product_name}</div>
+                                              <div className="text-xs text-gray-500">${(item.price_at_time * (item.quantity || 1)).toFixed(2)} {(item.quantity || 1) > 1 && `($${item.price_at_time} c/u)`}</div>
+                                              {item.notes && <div className="text-[11px] text-red-600 italic">📝 {item.notes}</div>}
+                                          </div>
+                                          <button onClick={() => handleRemoveItemFromOrder(item)} disabled={processing} className="text-red-500 hover:bg-red-50 p-2 rounded disabled:opacity-30"><XCircle size={20}/></button>
+                                      </div>
+                                  ))}
+                              </div>
+                              <div className="border-t pt-4 space-y-2">
+                                  <div className="flex gap-2">
+                                      <div className="w-20">
+                                          <label className="block text-[10px] font-bold text-gray-500 uppercase">Cant.</label>
+                                          <input type="number" min="1" className="border p-1.5 rounded w-full text-center font-bold" value={editAddQty} onChange={e => setEditAddQty(e.target.value)} />
+                                      </div>
+                                      <div className="flex-1">
+                                          <label className="block text-[10px] font-bold text-gray-500 uppercase">Nota opcional</label>
+                                          <input className="border p-1.5 rounded w-full text-sm" placeholder="Ej: sin cebolla..." value={editAddNote} onChange={e => setEditAddNote(e.target.value)} />
+                                      </div>
+                                  </div>
+                                  <div className="flex items-center gap-2"><Search className="text-gray-400"/><input className="border p-2 rounded w-full" placeholder="Buscar plato o combo..." value={itemSearch} onChange={e => setItemSearch(e.target.value)} /></div>
+                                  <div className="grid grid-cols-2 gap-2 h-36 overflow-y-auto">
+                                      {products.filter(p => p.name.toLowerCase().includes(itemSearch.toLowerCase())).map(p => (
+                                          <button key={p.id} disabled={processing} onClick={() => handleAddItemToOrder(p)} className="text-xs p-2 border rounded hover:bg-green-50 text-left disabled:opacity-50">
+                                              <div className="font-bold">{p.name}</div>
+                                              <div className="text-green-600">${p.price_usd}</div>
+                                          </button>
+                                      ))}
+                                  </div>
+                              </div>
                           </>
                       )}
                   </div>
@@ -923,8 +1278,19 @@ export default function DondeManoloApp() {
       {lastOrderTicket && !closingData && (
         <div className="fixed inset-0 bg-black bg-opacity-80 z-[100] flex items-center justify-center no-print">
             <div className="bg-white p-4 w-80 text-black font-mono text-sm shadow-2xl rounded-lg">
-                <div className="text-center font-bold text-lg border-b border-dashed pb-2 mb-2">{ticketType === 'anexo' ? 'ANEXO / AGREGADO' : 'ORDEN CREADA'}</div>
-                <div className="mb-2">MESA: <span className="font-bold">{lastOrderTicket.info}</span></div>
+                <div className="text-center font-bold text-lg border-b border-dashed pb-2 mb-2">{ticketType === 'anexo' ? 'ANEXO / AGREGADO' : 'COMANDA'}</div>
+                <div className="mb-2">{lastOrderTicket.service_type}: <span className="font-bold">{lastOrderTicket.info}</span></div>
+                <div className="border-t border-b border-dashed py-2 mb-3 max-h-60 overflow-y-auto space-y-1">
+                    {(lastOrderTicket.items || lastOrderTicket.order_items || []).map((item, idx) => (
+                        <div key={idx}>
+                            <div className="font-bold">{item.quantity || 1} x {item.product_name}</div>
+                            {combos[item.product_name]?.length > 0 && (
+                                <div className="text-[11px] text-gray-600 pl-2">({combos[item.product_name].map(c => `${c.quantity * (item.quantity || 1)}x ${c.product_name}`).join(', ')})</div>
+                            )}
+                            {item.notes && <div className="text-xs italic text-gray-700 pl-2">Nota: {item.notes}</div>}
+                        </div>
+                    ))}
+                </div>
                 <button onClick={() => window.print()} className="w-full bg-orange-600 text-white p-3 rounded mb-2 font-bold">IMPRIMIR</button>
                 <button onClick={() => setLastOrderTicket(null)} className="w-full bg-gray-200 p-2 rounded">CERRAR</button>
             </div>
@@ -943,7 +1309,12 @@ export default function DondeManoloApp() {
           <div className="ticket-linea"></div>
           {(lastOrderTicket.items || lastOrderTicket.order_items || []).map((item, index) => (
             <div key={index} style={{ marginBottom: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="ticket-negrita" style={{ fontSize: '18px' }}>{item.quantity} x {item.product_name}</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="ticket-negrita" style={{ fontSize: '18px' }}>{item.quantity || 1} x {item.product_name}</span></div>
+                {combos[item.product_name]?.length > 0 && (
+                    <div style={{ fontSize: '11px' }}>
+                        Incluye: {combos[item.product_name].map(c => `${c.quantity * (item.quantity || 1)}x ${c.product_name}`).join(', ')}
+                    </div>
+                )}
                 {item.notes && <div style={{ fontSize: '12px', fontStyle: 'italic' }}>(Nota: {item.notes})</div>}
             </div>
           ))}
@@ -951,7 +1322,7 @@ export default function DondeManoloApp() {
         </div>
       )}
 
-    {/* --- DOCUMENTOS DE IMPRESION SE MANTIENEN IGUAL --- */}
+    {/* --- DOCUMENTOS DE IMPRESION --- */}
     {closingData && !closingData.isGlobal && (
         <div id="cierre-impresion" className="p-8 font-sans bg-white relative">
             <div className="no-print absolute top-0 right-0 p-4">
