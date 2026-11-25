@@ -170,11 +170,26 @@ export default function DondeManoloApp() {
       
       const o = await supabase.from('orders').select('*, order_items(*)').eq('session_id', session.id);
       const e = await supabase.from('expenses').select('*').eq('session_id', session.id);
-      const p = await supabase.from('payments').select('*, orders(info)').eq('session_id', session.id);
+      let p = await supabase.from('payments').select('*, orders(info, order_items(*))').eq('session_id', session.id);
+      if (p.error) {
+          p = await supabase.from('payments').select('*, orders(info)').eq('session_id', session.id);
+      }
       
       const sessionOrders = o.data || [];
       const sessionExpenses = e.data || [];
       const allPayments = p.data || [];
+
+      // Respaldo para pagos/abonos de órdenes que pertenezcan a sesiones anteriores
+      const missingOrderIds = [...new Set(
+          allPayments
+              .filter(pay => pay.order_id && !(pay.orders?.order_items?.length > 0) && !sessionOrders.some(ord => ord.id === pay.order_id))
+              .map(pay => pay.order_id)
+      )];
+      let extraOrderItems = [];
+      if (missingOrderIds.length > 0) {
+          const { data: extraItemsData } = await supabase.from('order_items').select('*').in('order_id', missingOrderIds);
+          extraOrderItems = extraItemsData || [];
+      }
 
       const totalVentasDespachadas = sessionOrders.reduce((sum, o) => sum + o.total_usd, 0);
       const dineroCobrado = allPayments.reduce((sum, pay) => sum + pay.amount_usd, 0);
@@ -219,10 +234,19 @@ export default function DondeManoloApp() {
           net: dineroCobrado - expensesTotal,
           breakdown, cashInUsd, cashInBs, productCount, inventoryUsage, 
           sessionExpenses,
-          allPayments: allPayments.map(pay => ({ 
-              ...pay, 
-              client_info: pay.orders?.info || 'Cliente/Abono'
-          }))
+          allPayments: allPayments.map(pay => {
+              const matchedOrder = sessionOrders.find(ord => ord.id === pay.order_id);
+              const itemsDetalle = pay.orders?.order_items?.length > 0
+                  ? pay.orders.order_items
+                  : (matchedOrder?.order_items?.length > 0
+                      ? matchedOrder.order_items
+                      : extraOrderItems.filter(item => item.order_id === pay.order_id));
+              return { 
+                  ...pay, 
+                  client_info: pay.orders?.info || matchedOrder?.info || 'Cliente/Abono',
+                  items_detalle: itemsDetalle
+              };
+          })
       };
 
       setClosingData(report);
@@ -305,7 +329,7 @@ export default function DondeManoloApp() {
             const { data: freshData } = await supabase.from('ingredients').select('stock').eq('id', ingId).single();
             if (freshData) { await supabase.from('ingredients').update({ stock: parseFloat(freshData.stock) - qtyDeduct }).eq('id', ingId); }
         }
-        setTicketType('full'); setLastOrderTicket({ ...order, items: items }); 
+        setClosingData(null); setTicketType('full'); setLastOrderTicket({ ...order, items: items }); 
         setCart([]); setServiceInfo({ type: 'Mesa', val: '' }); loadData();
         if(confirm("¿Imprimir Ticket de Comanda?")) { setTimeout(() => window.print(), 500); }
     } catch (e) { alert("Error: " + e.message); } finally { setProcessing(false); setLoading(false); }
@@ -465,7 +489,7 @@ export default function DondeManoloApp() {
               } 
           }
           alert("Agregado");
-          if(confirm("¿Imprimir Ticket?")) { setTicketType('anexo'); setLastOrderTicket({ ...selectedOrder, items: [{ product_name: product.name, quantity: 1, notes: 'ANEXO' }] }); setTimeout(() => window.print(), 500); }
+          if(confirm("¿Imprimir Ticket?")) { setClosingData(null); setTicketType('anexo'); setLastOrderTicket({ ...selectedOrder, items: [{ product_name: product.name, quantity: 1, notes: 'ANEXO' }] }); setTimeout(() => window.print(), 500); }
           fetchOrders();
       } catch (e) { alert("Error: " + e.message); } finally { setProcessing(false); setLoading(false); }
   };
@@ -729,7 +753,7 @@ export default function DondeManoloApp() {
                       <div className="p-4"><ul className="space-y-3">{o.order_items.map(item => (<li key={item.id} className="text-gray-800 leading-tight"><div className="font-bold text-lg">• {item.product_name}</div>{item.notes && <div className="text-red-600 text-sm bg-red-50 p-1 rounded mt-1">📝 {item.notes}</div>}</li>))}</ul></div>
                       <div className="flex">
                          <button onClick={async () => { await supabase.from('orders').update({status:'listo'}).eq('id', o.id); fetchOrders(); }} className="flex-1 bg-green-600 text-white font-bold py-3 hover:bg-green-700">MARCAR LISTO ✅</button>
-                         <button onClick={() => { setTicketType('full'); setLastOrderTicket(o); setTimeout(()=>window.print(), 200); }} className="bg-gray-700 text-white px-4"><Printer size={20}/></button>
+                         <button onClick={() => { setClosingData(null); setTicketType('full'); setLastOrderTicket({ ...o, items: o.order_items || [] }); setTimeout(()=>window.print(), 300); }} className="bg-gray-700 text-white px-4"><Printer size={20}/></button>
                       </div>
                   </div>
               ))}
@@ -766,7 +790,7 @@ export default function DondeManoloApp() {
                               </div>
                               <div className="flex items-center gap-2">
                                   <div className="text-right"><div className="font-bold text-xl">${o.total_usd.toFixed(2)}</div></div>
-                                  <button onClick={(e) => { e.stopPropagation(); setTicketType('full'); setLastOrderTicket(o); setTimeout(()=>window.print(), 200); }} className="bg-gray-200 p-2 rounded hover:bg-gray-300"><Printer size={16}/></button>
+                                  <button onClick={(e) => { e.stopPropagation(); setClosingData(null); setTicketType('full'); setLastOrderTicket({ ...o, items: o.order_items || [] }); setTimeout(()=>window.print(), 300); }} className="bg-gray-200 p-2 rounded hover:bg-gray-300"><Printer size={16}/></button>
                                   {user.role === 'owner' && <button onClick={(e) => { e.stopPropagation(); handleDeleteOrder(o.id); }} className="bg-red-100 text-red-600 p-2 rounded hover:bg-red-200"><Trash2 size={16}/></button>}
                               </div>
                           </div>
@@ -917,7 +941,7 @@ export default function DondeManoloApp() {
           <div className="ticket-linea"></div>
           <div className="ticket-centrado ticket-negrita">{ticketType === 'anexo' ? '*** ANEXO ***' : 'COMANDA'}</div>
           <div className="ticket-linea"></div>
-          {lastOrderTicket.items?.map((item, index) => (
+          {(lastOrderTicket.items || lastOrderTicket.order_items || []).map((item, index) => (
             <div key={index} style={{ marginBottom: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="ticket-negrita" style={{ fontSize: '18px' }}>{item.quantity} x {item.product_name}</span></div>
                 {item.notes && <div style={{ fontSize: '12px', fontStyle: 'italic' }}>(Nota: {item.notes})</div>}
